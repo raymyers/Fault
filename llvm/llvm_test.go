@@ -744,7 +744,8 @@ func prepTest(test string, specType bool) (string, error) {
 
 func validateIR(ir string) ([]byte, error) {
 	//Run LLVM optimizer to check IR is valid
-	cmd := exec.Command("opt", "-S", "-inline", "--mem2reg")
+	//This invocation assumes LLVM 12+, earlier use `opt -S -inline -mem2reg`
+	cmd := exec.Command("opt", "-S", "--passes=inline,mem2reg")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
