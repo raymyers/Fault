@@ -1,0 +1,11 @@
+name = "FaultSemantics"
+version = "0.1.0"
+defaultTargets = ["FaultSemantics"]
+
+[[require]]
+name = "cslib"
+scope = "leanprover"
+rev = "main"
+
+[[lean_lib]]
+name = "FaultSemantics"
