@@ -80,11 +80,37 @@ def assumptionHolds (e : Expr) (temp : Temporal)
 
 /-! ## Invariant Checking -/
 
+/-! ## When...Then Assertions (Phase 8.5)
+
+  `assert when guard then body` means: at every state where `guard` holds,
+  `body` must also hold. The Go compiler generates:
+  - For assert: negated to `(and guard (not body))` — find a state where
+    guard holds but body doesn't
+  - For assume: `(=> guard body)` — constrain solver
+-/
+
+/-- Conditional assertion: `when guard then body` with temporal modality.
+    Semantics: `interpretTemporal temp (guard → body) states` -/
+def assertionWhenHolds (guard body : Expr) (temp : Temporal)
+    (states : List FaultState) : Prop :=
+  interpretTemporal temp
+    (fun σ => eval σ guard = .bool true → eval σ body = .bool true)
+    states
+
+/-- Conditional assumption (not negated) -/
+def assumptionWhenHolds (guard body : Expr) (temp : Temporal)
+    (states : List FaultState) : Prop :=
+  interpretTemporal temp
+    (fun σ => eval σ guard = .bool true → eval σ body = .bool true)
+    states
+
 /-- Check an invariant against a trace -/
 def checkInvariant (inv : Invariant) (states : List FaultState) : Prop :=
   match inv with
   | .assert e temp => assertionHolds e temp states
   | .assume e temp => assumptionHolds e temp states
+  | .assertWhen guard body temp => assertionWhenHolds guard body temp states
+  | .assumeWhen guard body temp => assumptionWhenHolds guard body temp states
 
 /-- All invariants hold over a trace -/
 def allInvariantsHold (invs : List Invariant) (states : List FaultState) : Prop :=

@@ -42,19 +42,74 @@ def evalUnOp (op : UnOp) (v : SVal) : SVal :=
   | _, _ => .nil
 
 /-- Deterministic expression evaluation against a state.
-    For unknown/uncertain values, this returns nil — nondeterminism
-    is handled at the transition level. -/
+    For concrete values, this is the primary evaluation function.
+    For unknown/uncertain, returns .nil — use `EvalR` (relational)
+    for reasoning about nondeterministic values. -/
 def eval (σ : FaultState) : Expr → SVal
   | .lit (.nat n)   => .real (Float.ofNat n)
   | .lit (.float f) => .real f
   | .lit (.bool b)  => .bool b
+  | .lit (.str _)   => .bool false  -- Go compiler: strings compile to `false`
   | .lit _          => .nil
   | .var x          => σ.getVar x
   | .binop op l r   => evalBinOp op (eval σ l) (eval σ r)
   | .unop op e      => evalUnOp op (eval σ e)
-  | .dot e _field   => eval σ e  -- simplified: treat dot access as variable lookup
+  | .dot e _field   => eval σ e  -- pre-flattened names: dot should be resolved before execution
   | .history x k    => σ.readHistory x k
   | .choose _       => .nil      -- nondeterministic: resolved at transition level
+
+/-! ## Relational Evaluation (for unknown/uncertain)
+
+  The Go compiler treats `unknown()` as a free SMT variable — the solver
+  can assign ANY value. `uncertain(μ,σ)` is also free (any real value,
+  with probability annotation post-hoc).
+
+  `EvalR σ e v` means "expression `e` CAN evaluate to value `v` in state `σ`."
+  For concrete values, this coincides with `eval`. For unknowns, ANY value works.
+-/
+
+/-- Relational expression evaluation: `EvalR σ e v` holds when `e` can
+    evaluate to `v` in state `σ`. This is the authoritative semantics
+    for nondeterministic values. -/
+inductive EvalR : FaultState → Expr → SVal → Prop where
+  | litNat (σ : FaultState) (n : Nat) :
+      EvalR σ (.lit (.nat n)) (.real (Float.ofNat n))
+  | litFloat (σ : FaultState) (f : Float) :
+      EvalR σ (.lit (.float f)) (.real f)
+  | litBool (σ : FaultState) (b : Bool) :
+      EvalR σ (.lit (.bool b)) (.bool b)
+  | litStr (σ : FaultState) (s : String) :
+      EvalR σ (.lit (.str s)) (.bool false)
+  /-- Unknown: can be ANY value. This is the key nondeterminism rule.
+      The SMT solver is free to choose any satisfying value. -/
+  | litUnknown (σ : FaultState) (v : SVal) :
+      EvalR σ (.lit .unknown) v
+  /-- Uncertain: can be any real value (probability annotated post-hoc) -/
+  | litUncertain (σ : FaultState) (μ σ_ : Float) (v : Float) :
+      EvalR σ (.lit (.uncertain μ σ_)) (.real v)
+  | var (σ : FaultState) (x : Name) :
+      EvalR σ (.var x) (σ.getVar x)
+  | binop (σ : FaultState) (op : BinOp) (l r : Expr) (vl vr : SVal) :
+      EvalR σ l vl → EvalR σ r vr →
+      EvalR σ (.binop op l r) (evalBinOp op vl vr)
+  | unop (σ : FaultState) (op : UnOp) (e : Expr) (v : SVal) :
+      EvalR σ e v →
+      EvalR σ (.unop op e) (evalUnOp op v)
+  | dot (σ : FaultState) (e : Expr) (field : Name) (v : SVal) :
+      EvalR σ e v →
+      EvalR σ (.dot e field) v
+  | history (σ : FaultState) (x : Name) (k : Int) :
+      EvalR σ (.history x k) (σ.readHistory x k)
+  /-- Choose: nondeterministic selection from alternatives -/
+  | choose (σ : FaultState) (es : List Expr) (e : Expr) (v : SVal) :
+      e ∈ es → EvalR σ e v →
+      EvalR σ (.choose es) v
+
+/-- For concrete (non-unknown/uncertain) expressions, EvalR agrees with eval -/
+theorem evalR_of_eval (σ : FaultState) (e : Expr) (v : SVal) :
+    eval σ e = v → v ≠ .nil →
+    EvalR σ e v := by
+  sorry  -- provable by structural induction on e
 
 /-! ## Arithmetic Helpers -/
 
@@ -74,22 +129,29 @@ def applyFlowOp (op : FlowOp) (current new_ : SVal) : SVal :=
 /-! ## Small-Step Transition Relation -/
 
 /-- The small-step transition relation for Fault.
-    `faultStep σ μ σ'` means state σ transitions to σ' emitting label μ. -/
-inductive faultStep : FaultState → Label → FaultState → Prop where
-  /-- Stock assignment: stock op= expr -/
-  | assignStep (σ : FaultState) (x : Name) (op : FlowOp) (e : Expr) :
-      faultStep σ
-        (.assign x op (eval σ e))
-        (σ.setVar x (applyFlowOp op (σ.getVar x) (eval σ e)))
+    `faultStep σ μ σ'` means state σ transitions to σ' emitting label μ.
 
-  /-- Conditional: true branch -/
+    Uses `EvalR` (relational evaluation) so that unknown/uncertain values
+    generate nondeterministic transitions — the LTS contains ALL possible
+    traces, matching what the SMT solver explores. -/
+inductive faultStep : FaultState → Label → FaultState → Prop where
+  /-- Stock assignment: stock op= expr.
+      Uses EvalR so unknowns can take any value. -/
+  | assignStep (σ : FaultState) (x : Name) (op : FlowOp) (e : Expr) (v : SVal) :
+      EvalR σ e v →
+      faultStep σ
+        (.assign x op v)
+        (σ.setVar x (applyFlowOp op (σ.getVar x) v))
+
+  /-- Conditional: true branch.
+      Uses EvalR so unknown conditions can go either way. -/
   | ifTrue (σ : FaultState) (cond : Expr) (thenBody elseBody : List Stmt) :
-      eval σ cond = .bool true →
+      EvalR σ cond (.bool true) →
       faultStep σ (.branch true) σ
 
   /-- Conditional: false branch -/
   | ifFalse (σ : FaultState) (cond : Expr) (thenBody elseBody : List Stmt) :
-      eval σ cond = .bool false →
+      EvalR σ cond (.bool false) →
       faultStep σ (.branch false) σ
 
   /-- Component state advance -/

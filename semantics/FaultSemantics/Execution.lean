@@ -17,25 +17,28 @@ open Cslib
 
 mutual
 
-/-- Execute a single statement, relating input state to output state and trace. -/
+/-- Execute a single statement, relating input state to output state and trace.
+    Uses `EvalR` for expression evaluation so unknown/uncertain values
+    create nondeterministic executions (matching SMT solver behavior). -/
 inductive ExecStmt : FaultState → Stmt → List Label → FaultState → Prop where
-  /-- Flow assignment -/
-  | flowAssign (σ : FaultState) (x : Name) (op : FlowOp) (e : Expr) :
+  /-- Flow assignment (nondeterministic via EvalR for unknowns) -/
+  | flowAssign (σ : FaultState) (x : Name) (op : FlowOp) (e : Expr) (v : SVal) :
+      EvalR σ e v →
       ExecStmt σ (.flowAssign x op e)
-        [.assign x op (eval σ e)]
-        (σ.setVar x (applyFlowOp op (σ.getVar x) (eval σ e)))
+        [.assign x op v]
+        (σ.setVar x (applyFlowOp op (σ.getVar x) v))
 
-  /-- Conditional: true branch -/
+  /-- Conditional: true branch (nondeterministic via EvalR) -/
   | ifTrue (σ σ' : FaultState) (cond : Expr) (thenBody elseBody : List Stmt)
       (μs : List Label) :
-      eval σ cond = .bool true →
+      EvalR σ cond (.bool true) →
       ExecStmts σ thenBody μs σ' →
       ExecStmt σ (.ifThenElse cond thenBody elseBody) (.branch true :: μs) σ'
 
-  /-- Conditional: false branch -/
+  /-- Conditional: false branch (nondeterministic via EvalR) -/
   | ifFalse (σ σ' : FaultState) (cond : Expr) (thenBody elseBody : List Stmt)
       (μs : List Label) :
-      eval σ cond = .bool false →
+      EvalR σ cond (.bool false) →
       ExecStmts σ elseBody μs σ' →
       ExecStmt σ (.ifThenElse cond thenBody elseBody) (.branch false :: μs) σ'
 
@@ -154,3 +157,54 @@ inductive ExecSystemRound :
       ExecSystemRound σ runBody comps vars
         (μs_run ++ μs_comp ++ [.round σ.round])
         ((σ_comp.snapshot vars).nextRound)
+
+/-! ## Full Program Execution (Phase 8.2: Init Blocks)
+
+  The Go compiler executes `for N init{...} run{...}` as:
+  1. Execute init block ONCE (round 0)
+  2. Execute run block N times (rounds 0..N-1)
+
+  This matches llvm/compiler.go:359-376:
+    if i == 0 { compileBlock(v.Inits) }
+    compileBlock(v.Body)
+-/
+
+/-- Execute a complete program: init once, then N rounds of run -/
+inductive ExecProgram :
+    FaultState → List Stmt → List Stmt → Nat → List Name →
+    List Label → FaultState → Prop where
+  | mk (σ σ_init σ' : FaultState) (initBlock runBlock : List Stmt)
+      (n : Nat) (vars : List Name) (μs_init μs_rounds : List Label) :
+      -- 1. Execute init block once
+      ExecStmts σ initBlock μs_init σ_init →
+      -- 2. Execute N rounds of the run block
+      ExecRounds σ_init n runBlock vars μs_rounds σ' →
+      ExecProgram σ initBlock runBlock n vars (μs_init ++ μs_rounds) σ'
+
+/-- Execute N system rounds (with components) -/
+inductive ExecSystemRounds :
+    FaultState → Nat → List Stmt → List CompDef → List Name →
+    List Label → FaultState → Prop where
+  | zero (σ : FaultState) (runBody : List Stmt) (comps : List CompDef)
+      (vars : List Name) :
+      ExecSystemRounds σ 0 runBody comps vars [] σ
+
+  | succ (σ σ_mid σ' : FaultState) (n : Nat) (runBody : List Stmt)
+      (comps : List CompDef) (vars : List Name) (μs₁ μs₂ : List Label) :
+      ExecSystemRound σ runBody comps vars μs₁ σ_mid →
+      ExecSystemRounds σ_mid n runBody comps vars μs₂ σ' →
+      ExecSystemRounds σ (n + 1) runBody comps vars (μs₁ ++ μs₂) σ'
+
+/-- Execute a complete system program: init once, then N rounds with components -/
+inductive ExecSystemProgram :
+    FaultState → List Stmt → List Stmt → List CompDef → Nat → List Name →
+    List Label → FaultState → Prop where
+  | mk (σ σ_init σ' : FaultState) (initBlock runBlock : List Stmt)
+      (comps : List CompDef) (n : Nat) (vars : List Name)
+      (μs_init : List Label) (μs_rounds : List Label) :
+      -- 1. Execute init block once
+      ExecStmts σ initBlock μs_init σ_init →
+      -- 2. Execute N system rounds (run + components)
+      ExecSystemRounds σ_init n runBlock comps vars μs_rounds σ' →
+      ExecSystemProgram σ initBlock runBlock comps n vars
+        (μs_init ++ μs_rounds) σ'

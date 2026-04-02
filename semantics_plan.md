@@ -381,6 +381,111 @@ Phase 0 ──→ Phase 1 ──→ Phase 2 ──→ Phase 3 ──→ Phase 4
 
 ---
 
+## Phase 8: Completeness — Closing the Gap with the Go Compiler
+
+Audit of Lean semantics vs Go compiler found 4 CRITICAL and 6 MAJOR gaps.
+This phase fixes them so the formalization is sufficient to build a correct
+alternative implementation.
+
+### 8.1 Name Resolution (CRITICAL → resolved by convention)
+
+The Go compiler flattens qualified names: `f.target.value` in spec `myspec`
+with scope `mybuffer` becomes `myspec_mybuffer_f_target_value`. The Lean
+semantics operates on **pre-flattened names** — this is already what the
+oracle tests do. We formalize the flattening as a preprocessing function
+and document that `Expr.dot` is eliminated before execution.
+
+- [ ] Add `flattenName : List Name → Name` (join with `_`)
+- [ ] Add `resolveExpr : Spec → Expr → Expr` that replaces `dot` with flat `var`
+- [ ] Add `resolveAlias : (Name → Option Name) → Name → Name` for swap aliases
+- [ ] Document: execution semantics assume pre-flattened names
+
+### 8.2 Init Blocks (CRITICAL)
+
+Go compiler: init block runs ONCE in round 0, before the first run body.
+Lean `ExecRound` ignores init. Fix: add `ExecProgram` that runs init then N rounds.
+
+- [ ] Add `ExecProgram` inductive that sequences init + rounds
+- [ ] Oracle test: verify init-dependent model traces
+
+### 8.3 Unknown/Uncertain as Free Variables (CRITICAL)
+
+Go compiler: `unknown()` → free SMT variable (solver picks any value).
+`uncertain(μ,σ)` → same, but result annotated with probability.
+Lean `eval` returns `.nil` for both — wrong.
+
+Design: change `eval` from `FaultState → Expr → SVal` to a **relational**
+evaluation `EvalR : FaultState → Expr → SVal → Prop` where unknowns
+can take any value.
+
+- [ ] Add `EvalR` relational evaluation (replaces deterministic `eval` for proofs)
+- [ ] Keep `eval` for concrete computation (#guard tests)
+- [ ] `EvalR σ (.lit .unknown) v` holds for ALL `v : SVal`
+- [ ] `EvalR σ (.lit (.uncertain μ σ_)) v` holds for ALL `v : SVal` (real-valued)
+- [ ] Update `faultStep` to use `EvalR` in premises
+- [ ] Oracle test: unknowns.fspec counterexample as a valid LTS trace
+
+### 8.4 Conditional Nondeterminism (CRITICAL → clarification)
+
+The LTS already models this correctly: `faultStep.ifTrue` and `faultStep.ifFalse`
+are BOTH valid transitions. When the condition involves unknowns, BOTH branches
+are reachable — the solver explores all of them. The `ExecStmt` rules also
+allow either branch. No code change needed, but we add a theorem stating this.
+
+- [ ] Prove: unknown condition → both branches reachable
+- [ ] Document: LTS nondeterminism IS the SMT solver's branch exploration
+
+### 8.5 `when...then` Assertions (MAJOR)
+
+Go compiler: `assert when state_A then x >= 0` generates conditional SMT
+constraints: `(=> state_A_active (>= x 0))`.
+
+- [ ] Add `Invariant.assertWhen : Expr → Expr → Temporal → Invariant`
+- [ ] Add `Invariant.assumeWhen : Expr → Expr → Temporal → Invariant`
+- [ ] Semantics: `assertWhen guard body temp` ≡ `assert (guard → body) temp`
+- [ ] Oracle test against Go SMT output
+
+### 8.6 Strings as Booleans (MAJOR)
+
+Go compiler: `StringLiteral` compiles to `constant.NewBool(false)`.
+Strings are symbolic identifiers used in boolean logic, not runtime values.
+
+- [ ] Add `Val.str : String → Val` to the AST
+- [ ] `eval` maps `Val.str` to `SVal.bool false` (matches Go compiler)
+- [ ] Compound string expressions map to boolean logic
+
+### 8.7 Import Resolution (MAJOR)
+
+Go compiler: `.fsystem` imports `.fspec` files. Only globals, stocks, flows,
+and constants are merged. Run blocks and assertions from imported specs are
+ignored. Imported names are prefixed with the import alias.
+
+- [ ] Add `mergeImports : System → FaultState` that initializes state from
+      all imported specs + the system's own definitions
+- [ ] Document scoping: imported spec `s` with alias `a` → names prefixed `a_`
+- [ ] Oracle test: multi-file system
+
+### 8.8 Stock Swaps (MAJOR)
+
+Go compiler: `f.target = new_stock` creates an alias mapping old→new names.
+`AliasToBaseRaw` recursively resolves aliases at compile time.
+
+- [ ] Model as `AliasMap := Name → Option Name`
+- [ ] `resolveAlias` (from 8.1) handles recursive lookup
+- [ ] Swap is a preprocessing step, not a runtime operation
+
+### 8.9 Component Isolation (MAJOR)
+
+Go compiler: each component's state function is a separate LLVM function.
+It can only call `advance()`/`stay()` on components and trigger flows.
+It cannot directly assign to stocks.
+
+- [ ] Add `WellFormedStateFunc : List Stmt → Prop` predicate
+- [ ] Enforce: state functions contain only advance/stay/call/if, no flowAssign
+- [ ] Prove: well-formed state functions preserve component isolation
+
+---
+
 ## Open Questions
 
 - [ ] Resolve each question below before or during the relevant phase

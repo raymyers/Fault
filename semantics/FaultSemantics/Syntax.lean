@@ -16,6 +16,7 @@ inductive Val where
   | nat   : Nat → Val
   | float : Float → Val
   | bool  : Bool → Val
+  | str   : String → Val           -- string literal (compiles to bool false in Go)
   | unknown                         -- solver-determined free variable
   | uncertain (mean sigma : Float)  -- normal distribution N(μ,σ)
   | nil
@@ -87,6 +88,11 @@ inductive Temporal where
 inductive Invariant where
   | assert : Expr → Temporal → Invariant
   | assume : Expr → Temporal → Invariant
+  /-- `when guard then body` — conditional assertion/assumption.
+      Go compiler: generates `(=> guard body)` for assume,
+      `(and guard (not body))` for assert (negated). -/
+  | assertWhen : Expr → Expr → Temporal → Invariant
+  | assumeWhen : Expr → Expr → Temporal → Invariant
   deriving Repr, BEq
 
 /-! ## Declarations -/

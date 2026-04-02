@@ -9,3 +9,4 @@ import FaultSemantics.Oracle
 import FaultSemantics.Structural
 import FaultSemantics.Counterexample
 import FaultSemantics.Statechart
+import FaultSemantics.Resolve

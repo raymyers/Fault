@@ -72,7 +72,7 @@ mutual
 def execStmt_preserves_round (σ σ' : FaultState) (s : Stmt) (μs : List Label)
     (h : ExecStmt σ s μs σ') : σ'.round = σ.round :=
   match s, μs, h with
-  | _, _, .flowAssign _ x op e => by simp [FaultState.setVar]
+  | _, _, .flowAssign _ x op e v hEval => by simp [FaultState.setVar]
   | _, _, .ifTrue _ _ cond thenB elseB μs₂ hCond hBody =>
     execStmts_preserves_round _ _ _ _ hBody
   | _, _, .ifFalse _ _ cond thenB elseB μs₂ hCond hBody =>

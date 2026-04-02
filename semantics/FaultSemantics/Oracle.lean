@@ -188,8 +188,10 @@ def boolAfterRound1 : FaultState :=
 
 -- Verify the if-true/if-false transition structure:
 -- For any state and condition, exactly one of ifTrue/ifFalse applies
+-- (Now uses EvalR: if the condition CAN evaluate to true or false,
+-- the corresponding branch transition exists in the LTS)
 example (σ : FaultState) (cond : Expr) (tb eb : List Stmt) :
-    eval σ cond = .bool true ∨ eval σ cond = .bool false →
+    EvalR σ cond (.bool true) ∨ EvalR σ cond (.bool false) →
     faultStep σ (.branch true) σ ∨ faultStep σ (.branch false) σ := by
   intro h
   cases h with
