@@ -35,6 +35,32 @@ impl Ssa {
         *v += 1;
         format!("{}_{}", name, *v)
     }
+
+    /// Snapshot current version state for later restore.
+    pub fn snapshot(&self) -> HashMap<String, u32> {
+        self.versions.clone()
+    }
+
+    /// Restore version state from a snapshot.
+    pub fn restore(&mut self, snap: HashMap<String, u32>) {
+        self.versions = snap;
+    }
+
+    /// Advance version numbers to be at least as high as those in `other`.
+    #[allow(dead_code)]
+    pub fn merge_max(&mut self, other: &HashMap<String, u32>) {
+        for (k, v) in other {
+            let cur = self.versions.entry(k.clone()).or_insert(0);
+            if *v > *cur {
+                *cur = *v;
+            }
+        }
+    }
+
+    /// Set the version of a specific variable.
+    pub fn set_version(&mut self, name: &str, ver: u32) {
+        self.versions.insert(name.to_string(), ver);
+    }
 }
 
 #[cfg(test)]

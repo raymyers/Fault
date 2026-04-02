@@ -6,7 +6,7 @@
 //! 3. Walk run block N rounds, SSA-versioning each assignment
 //! 4. Encode assertions (negated) and assumptions (not negated)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ssa::Ssa;
 use fault_resolve::ResolvedProgram;
@@ -46,8 +46,10 @@ struct SmtWriter {
     round_entries: Vec<HashMap<String, String>>,
     /// All qualified variable names (for tracking round entries).
     all_vars: Vec<String>,
-    /// Optional override SSA for expression reads (used in else-branch encoding).
+    /// Optional override SSA for expression reads (used in else-branch/parallel encoding).
     read_ssa: Option<Ssa>,
+    /// Track already-declared SMT variables to avoid duplicates.
+    declared: HashSet<String>,
 }
 
 impl SmtWriter {
@@ -70,12 +72,15 @@ impl SmtWriter {
             round_entries: Vec::new(),
             all_vars: Vec::new(),
             read_ssa: None,
+            declared: HashSet::new(),
         }
     }
 
     /// Declare an SMT variable.
     fn declare(&mut self, name: &str, sort: &'static str) {
-        self.declarations.push((name.to_string(), sort));
+        if self.declared.insert(name.to_string()) {
+            self.declarations.push((name.to_string(), sort));
+        }
     }
 
     /// Add an assertion.
@@ -180,28 +185,25 @@ impl SmtWriter {
                     if let Some(props) = stock_props.get(&resolved_stock_type) {
                         for (prop_name, template_val) in props {
                             let qname = format!("{}_{}_{}", self.spec_name, var_prefix, prop_name);
+
+                            // Always add name_map entries (even for duplicate vars)
+                            let stock_key = format!("{}_{}", resolved_stock_type, prop_name);
+                            self.name_map.insert(stock_key, qname.clone());
+                            let flow_key = format!("{}_{}_{}", flow_type, stock_ref, prop_name);
+                            self.name_map.insert(flow_key, qname.clone());
+                            let inst_key = format!("{}_{}_{}", inst_name, stock_ref, prop_name);
+                            self.name_map.insert(inst_key, qname.clone());
+
+                            // Only emit declaration once
                             if !emitted.insert(qname.clone()) {
                                 continue;
                             }
 
-                            // Check for property override (e.g., "s2.v" → 20)
                             let override_key = format!("{}.{}", var_prefix, prop_name);
                             let val = prop_overrides
                                 .get(&override_key)
                                 .cloned()
                                 .unwrap_or(template_val.clone());
-
-                            // Map stock_type_prop → qualified name
-                            let stock_key = format!("{}_{}", resolved_stock_type, prop_name);
-                            self.name_map.insert(stock_key, qname.clone());
-
-                            // Map flow_type.stock_ref.prop → qualified name
-                            let flow_key = format!("{}_{}_{}", flow_type, stock_ref, prop_name);
-                            self.name_map.insert(flow_key, qname.clone());
-
-                            // Map inst.stock_ref.prop → qualified name (for runtime resolution)
-                            let inst_key = format!("{}_{}_{}", inst_name, stock_ref, prop_name);
-                            self.name_map.insert(inst_key, qname.clone());
 
                             let sort = val_sort(&val);
                             self.var_sorts.insert(qname.clone(), sort);
@@ -570,6 +572,12 @@ impl SmtWriter {
         };
 
         self.assert_smt(&format!("(= {} {})", new_name, smt_rhs));
+
+        // Sync read_ssa to see this write for subsequent reads in same branch
+        if let Some(ref mut rssa) = self.read_ssa {
+            let ver = self.ssa.current(name);
+            rssa.set_version(name, ver);
+        }
     }
 
     /// Encode an expression to SMT-LIB2 string, using current SSA versions.
@@ -740,13 +748,131 @@ impl SmtWriter {
         }
     }
 
-    /// Encode parallel execution: all permutations.
+    /// Encode parallel execution with nondeterministic ordering.
+    ///
+    /// For 2 parallel calls [a, b], generates:
+    /// - Perm 0: a then b → @__run_0 = (merge vars = perm0 results)
+    /// - Perm 1: b then a → @__run_1 = (and (merge = perm0) (merge = perm1))
+    /// - XOR: exactly one ordering selected
     fn encode_parallel(&mut self, stmts: &[Stmt], prog: &ResolvedProgram) {
-        // For now, use canonical order (like exec does).
-        // TODO: generate permutation disjuncts for full nondeterminism.
+        if stmts.len() < 2 {
+            for s in stmts {
+                self.encode_stmt(s, prog);
+            }
+            return;
+        }
+
+        let start_snap = self.ssa.snapshot();
+
+        // Collect all variables that might be touched
+        let tracked_vars: Vec<String> = self.all_vars.clone();
+
+        // ── Perm 0: canonical order ────────────────────────────────────
         for s in stmts {
             self.encode_stmt(s, prog);
         }
+        let perm0_snap = self.ssa.snapshot();
+
+        // Collect perm0 final versioned names for tracked vars
+        let perm0_finals: Vec<(String, String)> = tracked_vars
+            .iter()
+            .filter_map(|v: &String| {
+                let start_v = start_snap.get(v).copied().unwrap_or(0);
+                let end_v = perm0_snap.get(v).copied().unwrap_or(0);
+                if end_v > start_v {
+                    Some((v.clone(), format!("{}_{}", v, end_v)))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Allocate merge variables for perm 0
+        self.ssa.restore(perm0_snap.clone());
+        let mut merge0: Vec<(String, String)> = Vec::new();
+        for (base, _final_name) in &perm0_finals {
+            let merge_name = self.ssa.next_name(base);
+            let sort = self.sort_for(base);
+            self.declare(&merge_name, sort);
+            merge0.push((base.to_string(), merge_name));
+        }
+        let after_merge0_snap = self.ssa.snapshot();
+
+        // Declare @__run selector variables
+        self.declare("@__run_0", "Bool");
+        self.declare("@__run_1", "Bool");
+
+        // @__run_0 = (and (= merge_i perm0_final_i) ...)
+        let perm0_eqs: Vec<String> = merge0
+            .iter()
+            .zip(perm0_finals.iter())
+            .map(|((_, merge), (_, final_v))| format!("(= {} {})", merge, final_v))
+            .collect();
+        let run0_body = if perm0_eqs.len() == 1 {
+            perm0_eqs[0].clone()
+        } else {
+            smt_and(&perm0_eqs)
+        };
+        self.assertions
+            .push(format!("(assert (= @__run_0 {}))", run0_body));
+
+        // ── Perm 1: reverse order ──────────────────────────────────────
+        // Reads start from the original state, writes get fresh versions
+        let mut read_ssa_for_perm1 = Ssa::new();
+        read_ssa_for_perm1.restore(start_snap.clone());
+        self.read_ssa = Some(read_ssa_for_perm1);
+        // Main SSA continues from after merge0 for fresh write versions
+        self.ssa.restore(after_merge0_snap.clone());
+
+        for s in stmts.iter().rev() {
+            self.encode_stmt(s, prog);
+        }
+        self.read_ssa = None;
+        let perm1_snap = self.ssa.snapshot();
+
+        // Collect perm1 final versioned names
+        let perm1_finals: Vec<(String, String)> = tracked_vars
+            .iter()
+            .filter_map(|v: &String| {
+                let after_m0 = after_merge0_snap.get(v).copied().unwrap_or(0);
+                let end_v = perm1_snap.get(v).copied().unwrap_or(0);
+                if end_v > after_m0 {
+                    Some((v.clone(), format!("{}_{}", v, end_v)))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Allocate merge variables for perm 1
+        let mut merge1: Vec<(String, String)> = Vec::new();
+        for (base, _) in &perm0_finals {
+            let merge_name = self.ssa.next_name(base);
+            let sort = self.sort_for(base);
+            self.declare(&merge_name, sort);
+            merge1.push((base.to_string(), merge_name));
+        }
+
+        // @__run_1 = (and (merge = perm0_final) (merge = perm1_final))
+        let mut perm1_eqs_p0: Vec<String> = Vec::new();
+        let mut perm1_eqs_p1: Vec<String> = Vec::new();
+        for ((base, merge_name), (_, p0_final)) in merge1.iter().zip(perm0_finals.iter()) {
+            perm1_eqs_p0.push(format!("(= {} {})", merge_name, p0_final));
+            // Find perm1 final for this var
+            if let Some((_, p1_final)) = perm1_finals.iter().find(|(b, _)| b == base) {
+                perm1_eqs_p1.push(format!("(= {} {})", merge_name, p1_final));
+            }
+        }
+        let group_p0 = smt_and(&perm1_eqs_p0);
+        let group_p1 = smt_and(&perm1_eqs_p1);
+        let run1_body = format!("(and {} {})", group_p0, group_p1);
+        self.assertions
+            .push(format!("(assert (= @__run_1 {}))", run1_body));
+
+        // XOR constraint
+        self.assertions.push(
+            "(assert (or (and @__run_0 (not @__run_1)) (and (not @__run_0) @__run_1)))".into(),
+        );
     }
 
     /// Encode invariants (assertions and assumptions).
