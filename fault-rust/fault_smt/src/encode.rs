@@ -231,6 +231,26 @@ impl SmtWriter {
                 self.declare(&format!("{}_0", qname), "Bool");
             }
         }
+        // Register imported constants with their original spec prefix.
+        // The assertion resolver converts Dot(alias, name) → Var("alias_name"),
+        // so we register "alias_name" → "{imported_spec_name}_name".
+        for (spec_name, consts) in &prog.imported_constants {
+            for cdef in consts {
+                let qname = format!("{}_{}", spec_name, cdef.name);
+                // Map alias_name → imported_spec_name (for each known alias)
+                for (alias, sname) in &prog.import_alias_map {
+                    if sname == spec_name {
+                        let alias_key = format!("{}_{}", alias, cdef.name);
+                        self.name_map.insert(alias_key, qname.clone());
+                    }
+                }
+                self.name_map.insert(cdef.name.clone(), qname.clone());
+                self.var_sorts.insert(qname.clone(), "Bool");
+                if cdef.expr.is_none() {
+                    self.declare(&format!("{}_0", qname), "Bool");
+                }
+            }
+        }
         // Second pass: process expression constants (intermediates declared first)
         for cdef in &prog.constants {
             if let Some(expr) = &cdef.expr {
@@ -240,6 +260,18 @@ impl SmtWriter {
                 // Declare the derived constant after intermediates
                 self.declare(&v0, "Bool");
                 self.assert_smt(&format!("(= {} {})", v0, rhs));
+            }
+        }
+        // Process imported expression constants
+        for (spec_name, consts) in &prog.imported_constants {
+            for cdef in consts {
+                if let Some(expr) = &cdef.expr {
+                    let qname = format!("{}_{}", spec_name, cdef.name);
+                    let v0 = format!("{}_0", qname);
+                    let rhs = self.encode_const_expr(expr, true);
+                    self.declare(&v0, "Bool");
+                    self.assert_smt(&format!("(= {} {})", v0, rhs));
+                }
             }
         }
     }
@@ -742,7 +774,7 @@ impl SmtWriter {
             self.assert_smt(&format!("(ite {} {} {})", cond_smt, then_conj, else_conj));
 
             self.assert_smt(&format!(
-                "(or (and {}\n(not {}))\n(and (not {})\n{}))",
+                "(or (and {} (not {})) (and (not {}) {}))",
                 true_name, false_name, true_name, false_name
             ));
         }
@@ -1347,6 +1379,8 @@ mod tests {
             }],
             run_block: vec![Stmt::Call("l.fn".into())],
             var_names: vec!["value".into()],
+            imported_constants: vec![],
+            import_alias_map: std::collections::HashMap::new(),
         };
 
         let smt = encode_program(&prog, "test");
@@ -1381,6 +1415,8 @@ mod tests {
             }],
             run_block: vec![],
             var_names: vec!["a".into(), "b".into()],
+            imported_constants: vec![],
+            import_alias_map: std::collections::HashMap::new(),
         };
 
         let smt = encode_program(&prog, "unknowns");

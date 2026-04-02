@@ -121,6 +121,7 @@ impl Parser {
         let mut stocks = Vec::new();
         let mut flows = Vec::new();
         let mut invariants = Vec::new();
+        let mut import_decls = Vec::new();
         let mut string_decls: Vec<(Name, Expr)> = Vec::new();
 
         loop {
@@ -148,8 +149,7 @@ impl Parser {
                     constants.extend(self.parse_const_decl()?);
                 }
                 TokenKind::Import => {
-                    // Specs can have imports too — skip for now, handled in system
-                    self.parse_import_decl()?;
+                    import_decls.push(self.parse_import_decl()?);
                 }
                 TokenKind::Assert => {
                     invariants.push(self.parse_assertion(false)?);
@@ -193,6 +193,8 @@ impl Parser {
             stocks,
             flows,
             invariants,
+            import_decls,
+            imported_specs: Vec::new(),
             run_block,
         })
     }
@@ -252,16 +254,17 @@ impl Parser {
             None
         };
 
-        // For now, imports are stored as spec names. The actual Spec objects
-        // will be filled in during the resolve phase.
+        // Stub specs from import declarations (actual loading done later).
         let import_specs: Vec<Spec> = imports
             .into_iter()
-            .map(|path| Spec {
-                name: path,
+            .map(|decl| Spec {
+                name: decl.alias,
                 constants: vec![],
                 stocks: vec![],
                 flows: vec![],
                 invariants: vec![],
+                import_decls: vec![],
+                imported_specs: vec![],
                 run_block: None,
             })
             .collect();
@@ -1130,50 +1133,51 @@ impl Parser {
 
     // ── Imports ─────────────────────────────────────────────────────
 
-    fn parse_import_decl(&mut self) -> Result<String, ParseError> {
+    fn parse_import_decl(&mut self) -> Result<ImportDecl, ParseError> {
         self.expect(TokenKind::Import)?;
 
+        let mut alias = String::new();
         let mut path = String::new();
+
         if self.eat(TokenKind::LParen) {
-            // Grouped imports
+            // Grouped: import (alias "path") or import ("path")
             while self.kind() != TokenKind::RParen {
-                // Optional alias
                 if self.kind() == TokenKind::Ident || self.kind() == TokenKind::Dot {
-                    let _alias = self.advance().clone();
+                    alias = self.advance().text.clone();
                 }
                 if self.kind() == TokenKind::StringLit {
-                    let tok = self.advance().clone();
-                    path = tok.text;
+                    path = self.advance().text.clone();
                 }
                 self.eat(TokenKind::Comma);
                 self.eat_semi();
             }
             self.expect(TokenKind::RParen)?;
         } else {
-            // Optional alias
+            // Bare: import alias "path" or import "path"
             if self.kind() == TokenKind::Ident {
                 let next = self.tokens.get(self.pos + 1).map(|t| t.kind);
                 if next == Some(TokenKind::StringLit) {
-                    let _alias = self.advance().clone();
+                    alias = self.advance().text.clone();
                 }
             }
             if self.kind() == TokenKind::StringLit {
-                let tok = self.advance().clone();
-                path = tok.text;
+                path = self.advance().text.clone();
             }
         }
         self.eat_semi();
 
-        // Extract spec name from path
-        let spec_name = path
-            .rsplit('/')
-            .next()
-            .unwrap_or(&path)
-            .trim_end_matches(".fspec")
-            .trim_end_matches(".fsystem")
-            .to_string();
+        // Default alias = spec name derived from filename
+        if alias.is_empty() {
+            alias = path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&path)
+                .trim_end_matches(".fspec")
+                .trim_end_matches(".fsystem")
+                .to_string();
+        }
 
-        Ok(spec_name)
+        Ok(ImportDecl { alias, path })
     }
 
     // ── System-specific ─────────────────────────────────────────────

@@ -7,6 +7,8 @@
 //! - Merge imports, validate components
 //! - Build `ResolvedProgram` for execution
 
+pub mod loader;
+
 use std::collections::HashMap;
 
 use fault_syntax::*;
@@ -225,6 +227,13 @@ pub struct ResolvedProgram {
     pub init_block: Vec<Stmt>,
     pub run_block: Vec<Stmt>,
     pub var_names: Vec<Name>,
+    /// Constants from imported specs: (imported_spec_name, constants).
+    /// These get declared with the imported spec's name prefix, not the
+    /// importing spec's prefix.
+    pub imported_constants: Vec<(Name, Vec<ConstDef>)>,
+    /// Mapping from import alias to imported spec name.
+    /// Used by the encoder to resolve cross-spec references.
+    pub import_alias_map: HashMap<Name, Name>,
 }
 
 /// Build a fully resolved program from a Spec (Resolve.lean:182).
@@ -239,14 +248,65 @@ pub fn resolve_spec(spec: Spec) -> ResolvedProgram {
         None => (0, vec![], vec![]),
     };
 
-    let var_names: Vec<Name> = spec
-        .stocks
+    // Merge imported definitions (Resolve.lean §8.7)
+    let mut all_stocks = spec.stocks;
+    let mut all_flows: Vec<FlowDef> = spec.flows;
+    let all_constants = spec.constants;
+    let mut all_invariants = spec.invariants;
+
+    for (idx, imported) in spec.imported_specs.iter().enumerate() {
+        let alias = spec
+            .import_decls
+            .get(idx)
+            .map(|d| d.alias.as_str())
+            .unwrap_or(&imported.name);
+
+        // Add imported stocks with alias prefix: alias.stock_name
+        for stock in &imported.stocks {
+            all_stocks.push(StockDef {
+                name: format!("{}.{}", alias, stock.name),
+                props: stock.props.clone(),
+            });
+        }
+        // Add imported flows with alias prefix: alias.flow_name
+        // Stock type references within these flows also get prefixed.
+        for flow in &imported.flows {
+            let prefixed_stocks: Vec<(Name, Name)> = flow
+                .stocks
+                .iter()
+                .map(|(ref_name, type_name)| (ref_name.clone(), format!("{}.{}", alias, type_name)))
+                .collect();
+            all_flows.push(FlowDef {
+                name: format!("{}.{}", alias, flow.name),
+                stocks: prefixed_stocks,
+                funcs: flow.funcs.clone(),
+            });
+        }
+        // Add imported invariants
+        all_invariants.extend(imported.invariants.clone());
+    }
+
+    // Collect imported constants separately (they keep their original spec prefix)
+    let mut imported_constants: Vec<(Name, Vec<ConstDef>)> = Vec::new();
+    let mut import_alias_map: HashMap<Name, Name> = HashMap::new();
+    for (idx, imported) in spec.imported_specs.iter().enumerate() {
+        let alias = spec
+            .import_decls
+            .get(idx)
+            .map(|d| d.alias.clone())
+            .unwrap_or_else(|| imported.name.clone());
+        import_alias_map.insert(alias.clone(), imported.name.clone());
+        if !imported.constants.is_empty() {
+            imported_constants.push((imported.name.clone(), imported.constants.clone()));
+        }
+    }
+
+    let var_names: Vec<Name> = all_stocks
         .iter()
         .flat_map(|st| st.props.iter().map(|(n, _)| n.clone()))
         .collect();
 
-    let resolved_invariants = spec
-        .invariants
+    let resolved_invariants = all_invariants
         .into_iter()
         .map(|inv| resolve_invariant(&aliases, &scope, inv))
         .collect();
@@ -261,16 +321,15 @@ pub fn resolve_spec(spec: Spec) -> ResolvedProgram {
         .map(|s| resolve_stmt(&aliases, &scope, s))
         .collect();
 
-    let resolved_flows = spec
-        .flows
+    let resolved_flows = all_flows
         .into_iter()
         .map(|f| resolve_flow_def(&aliases, &scope, f))
         .collect();
 
     ResolvedProgram {
-        stocks: spec.stocks,
+        stocks: all_stocks,
         flows: resolved_flows,
-        constants: spec.constants,
+        constants: all_constants,
         components: vec![],
         invariants: resolved_invariants,
         start_states: vec![],
@@ -278,6 +337,8 @@ pub fn resolve_spec(spec: Spec) -> ResolvedProgram {
         init_block: resolved_init,
         run_block: resolved_run,
         var_names,
+        imported_constants,
+        import_alias_map,
     }
 }
 
@@ -326,6 +387,8 @@ pub fn resolve_system(sys: System) -> ResolvedProgram {
         init_block: resolved_init,
         run_block: resolved_run,
         var_names,
+        imported_constants: vec![],
+        import_alias_map: HashMap::new(),
     }
 }
 
@@ -585,6 +648,8 @@ mod tests {
             }],
             flows: vec![],
             invariants: vec![],
+            import_decls: vec![],
+            imported_specs: vec![],
             run_block: Some((3, vec![], vec![])),
         };
 
@@ -613,6 +678,8 @@ mod tests {
                 expr: Expr::Lit(Val::Bool(true)),
                 temporal: Temporal::Always,
             }],
+            import_decls: vec![],
+            imported_specs: vec![],
             run_block: None,
         };
         let spec2 = Spec {
@@ -624,6 +691,8 @@ mod tests {
             }],
             flows: vec![],
             invariants: vec![],
+            import_decls: vec![],
+            imported_specs: vec![],
             run_block: None,
         };
         let specs = vec![spec1, spec2];

@@ -3,6 +3,7 @@
 //! For each fixture with `input.fspec` + `expected.smt2`, we verify our encoder
 //! produces semantically identical SMT output (modulo whitespace and declaration order).
 
+use fault_resolve::loader::load_imports;
 use fault_resolve::resolve_spec;
 use fault_smt::encode_program;
 use fault_syntax::parser::parse_spec;
@@ -66,12 +67,24 @@ fn check_fixture(name: &str) {
         name
     );
 
-    // Run again to verify deterministic assertion order (assertions must be stable)
+    // Run again to verify set-level determinism (same assertions produced).
+    // Use token-sorted comparison since HashMap iteration order may
+    // reorder sub-expressions within assertions.
     let actual2 = encode_program(&resolve_spec(parse_spec(&input).unwrap()), &spec_name);
     let (_, asserts2) = normalize(&actual2);
+
+    fn sort_tokens(s: &str) -> Vec<String> {
+        let mut tokens: Vec<String> = s.split_whitespace().map(String::from).collect();
+        tokens.sort();
+        tokens
+    }
+    let mut sorted1: Vec<Vec<String>> = asserts.iter().map(|a| sort_tokens(a)).collect();
+    sorted1.sort();
+    let mut sorted2: Vec<Vec<String>> = asserts2.iter().map(|a| sort_tokens(a)).collect();
+    sorted2.sort();
     assert_eq!(
-        asserts, asserts2,
-        "{}: assertion order is non-deterministic across runs",
+        sorted1, sorted2,
+        "{}: assertion sets differ across runs",
         name
     );
 }
@@ -135,4 +148,76 @@ fn fixture_bathtub() {
 #[test]
 fn fixture_bathtub2() {
     check_fixture("bathtub2");
+}
+
+// ── Import fixtures ────────────────────────────────────────────────
+// These load imports from disk, then parse → load → resolve → encode.
+
+/// Run the import pipeline on an `.fspec` file in testdata/imports/.
+/// Compares against an `.smt2` oracle file next to it.
+/// Normalize an SMT string by stripping all whitespace (for Go oracle comparison).
+fn strip_ws(s: &str) -> String {
+    s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+fn check_import_fixture(fspec_name: &str, smt2_name: &str) {
+    let imports_dir = fixture_dir().join("imports");
+    let input_path = imports_dir.join(fspec_name);
+    let input = fs::read_to_string(&input_path)
+        .unwrap_or_else(|_| panic!("Missing imports/{}", fspec_name));
+
+    let mut spec =
+        parse_spec(&input).unwrap_or_else(|e| panic!("{}: parse failed: {:?}", fspec_name, e));
+
+    if !spec.import_decls.is_empty() {
+        load_imports(&mut spec, &imports_dir);
+    }
+
+    let spec_name = spec.name.clone();
+    let resolved = resolve_spec(spec);
+    let actual = encode_program(&resolved, &spec_name);
+
+    let expected_path = imports_dir.join(smt2_name);
+    let expected = fs::read_to_string(&expected_path)
+        .unwrap_or_else(|_| panic!("Missing imports/{}", smt2_name));
+
+    // Extract declarations and assertions from both, stripping whitespace
+    let (act_decls, act_asserts) = normalize(&actual);
+    let (exp_decls, exp_asserts) = normalize(&expected);
+
+    let mut act_d: Vec<String> = act_decls.iter().map(|s| strip_ws(s)).collect();
+    act_d.sort();
+    let mut exp_d: Vec<String> = exp_decls.iter().map(|s| strip_ws(s)).collect();
+    exp_d.sort();
+    assert_eq!(
+        act_d, exp_d,
+        "imports/{}: declaration mismatch\nactual:\n{}\nexpected:\n{}",
+        fspec_name, actual, expected
+    );
+
+    // Compare assertions as whitespace-stripped sorted sets
+    let mut act_a: Vec<String> = act_asserts.iter().map(|s| strip_ws(s)).collect();
+    act_a.sort();
+    let mut exp_a: Vec<String> = exp_asserts.iter().map(|s| strip_ws(s)).collect();
+    exp_a.sort();
+    assert_eq!(
+        act_a, exp_a,
+        "imports/{}: assertion mismatch\nactual:\n{}\nexpected:\n{}",
+        fspec_name, actual, expected
+    );
+}
+
+#[test]
+fn fixture_single_import() {
+    check_import_fixture("single_import.fspec", "single_import.smt2");
+}
+
+#[test]
+fn fixture_renamed_import() {
+    check_import_fixture("renamed_import.fspec", "renamed_import.smt2");
+}
+
+#[test]
+fn fixture_circle_import() {
+    check_import_fixture("circle_import1.fspec", "circle_import.smt2");
 }

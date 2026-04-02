@@ -56,6 +56,8 @@ fn simple_spec() -> Spec {
             )],
         }],
         invariants: vec![],
+        import_decls: vec![],
+        imported_specs: vec![],
         run_block: Some((
             1,
             vec![Stmt::Call("fl".into())],

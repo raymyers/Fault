@@ -324,6 +324,8 @@ mod tests {
             init_block: vec![],
             run_block: vec![],
             var_names: vec!["value".into()],
+            imported_constants: vec![],
+            import_alias_map: std::collections::HashMap::new(),
         };
 
         let state = build_initial_state(&prog);

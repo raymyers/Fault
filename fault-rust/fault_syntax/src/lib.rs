@@ -219,6 +219,15 @@ pub struct ConstDef {
     pub expr: Option<Expr>,
 }
 
+/// An import declaration: `import alias "path"` or `import ("path")`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImportDecl {
+    /// Alias used to reference imported definitions (e.g., `simple` or `foo`).
+    pub alias: Name,
+    /// File path relative to the importing file.
+    pub path: String,
+}
+
 // ── Top-level structures (Syntax.lean:128–145) ──────────────────────
 
 /// A `.fspec` file.
@@ -229,6 +238,12 @@ pub struct Spec {
     pub stocks: Vec<StockDef>,
     pub flows: Vec<FlowDef>,
     pub invariants: Vec<Invariant>,
+    /// Import declarations (alias + path).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub import_decls: Vec<ImportDecl>,
+    /// Loaded imported specs (populated by loader, not parser).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imported_specs: Vec<Spec>,
     /// (rounds, init_block, run_block)
     pub run_block: Option<(u64, Vec<Stmt>, Vec<Stmt>)>,
 }

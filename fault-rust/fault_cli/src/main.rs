@@ -70,10 +70,15 @@ fn main() {
         .to_string();
     let spec_name = file_spec_name.as_str();
 
+    let base_dir = Path::new(path)
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+
     match mode {
-        "smt" => run_smt_mode(&src, spec_name),
+        "smt" => run_smt_mode(&src, spec_name, &base_dir),
         "parse" => run_parse_mode(&src),
-        "check" => run_check_mode(&src, spec_name),
+        "check" => run_check_mode(&src, spec_name, &base_dir),
         other => {
             eprintln!("error: unknown mode '{}' (use smt, parse, or check)", other);
             process::exit(1);
@@ -89,14 +94,18 @@ fn print_usage() {
     eprintln!("  check  Check model with Z3 solver (default)");
 }
 
-fn run_smt_mode(src: &str, _spec_name: &str) {
-    let spec = match fault_syntax::parser::parse_spec(src) {
+fn run_smt_mode(src: &str, _spec_name: &str, base_dir: &Path) {
+    let mut spec = match fault_syntax::parser::parse_spec(src) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("parse error: {}", e);
             process::exit(1);
         }
     };
+
+    if !spec.import_decls.is_empty() {
+        fault_resolve::loader::load_imports(&mut spec, base_dir);
+    }
 
     let name = spec.name.clone();
     let resolved = fault_resolve::resolve_spec(spec);
@@ -116,14 +125,18 @@ fn run_parse_mode(src: &str) {
     println!("{:#?}", spec);
 }
 
-fn run_check_mode(src: &str, _spec_name: &str) {
-    let spec = match fault_syntax::parser::parse_spec(src) {
+fn run_check_mode(src: &str, _spec_name: &str, base_dir: &Path) {
+    let mut spec = match fault_syntax::parser::parse_spec(src) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("parse error: {}", e);
             process::exit(1);
         }
     };
+
+    if !spec.import_decls.is_empty() {
+        fault_resolve::loader::load_imports(&mut spec, base_dir);
+    }
 
     let name = spec.name.clone();
     let resolved = fault_resolve::resolve_spec(spec);

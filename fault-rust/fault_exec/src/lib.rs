@@ -335,6 +335,8 @@ mod tests {
             }],
             run_block: vec![Stmt::Call("l.fn".into())],
             var_names: vec!["value".into()],
+            imported_constants: vec![],
+            import_alias_map: std::collections::HashMap::new(),
         }
     }
 
