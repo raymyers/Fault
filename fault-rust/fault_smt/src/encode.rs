@@ -33,6 +33,9 @@ struct SmtWriter {
     unknown_vars: Vec<String>,
     /// Counter for generating unique block names.
     block_counter: u32,
+    /// Map from unqualified/resolved names → qualified names.
+    /// E.g., "s_a" → "unknowns_loop_data_a" for invariant resolution.
+    name_map: HashMap<String, String>,
 }
 
 impl SmtWriter {
@@ -48,6 +51,7 @@ impl SmtWriter {
             flow_funcs: HashMap::new(),
             unknown_vars: Vec::new(),
             block_counter: 0,
+            name_map: HashMap::new(),
         }
     }
 
@@ -91,18 +95,31 @@ impl SmtWriter {
         }
     }
 
-    /// Get all qualified variable names (spec_instance_stockRef_prop).
-    fn qualified_vars(&self) -> Vec<(String, Val)> {
+    /// Get all qualified variable names and build the name mapping.
+    fn build_qualified_vars(&mut self) -> Vec<(String, Val)> {
         let mut vars = Vec::new();
-        for (inst_name, flow_type) in &self.instances {
-            if let Some(stock_refs) = self.flow_stocks.get(flow_type) {
+        let instances = self.instances.clone();
+        let flow_stocks = self.flow_stocks.clone();
+        let stock_props = self.stock_props.clone();
+
+        for (inst_name, flow_type) in &instances {
+            if let Some(stock_refs) = flow_stocks.get(flow_type) {
                 for (stock_ref, stock_type) in stock_refs {
-                    if let Some(props) = self.stock_props.get(stock_type) {
+                    if let Some(props) = stock_props.get(stock_type) {
                         for (prop_name, val) in props {
                             let qname = format!(
                                 "{}_{}_{}_{}",
                                 self.spec_name, inst_name, stock_ref, prop_name
                             );
+
+                            // Map stock_type_prop → qualified name
+                            let stock_key = format!("{}_{}", stock_type, prop_name);
+                            self.name_map.insert(stock_key, qname.clone());
+
+                            // Map flow_type.stock_ref.prop → qualified name
+                            let flow_key = format!("{}_{}_{}", flow_type, stock_ref, prop_name);
+                            self.name_map.insert(flow_key, qname.clone());
+
                             vars.push((qname, val.clone()));
                         }
                     }
@@ -114,7 +131,7 @@ impl SmtWriter {
 
     /// Emit initial value declarations and constraints.
     fn encode_initial_values(&mut self) {
-        let vars = self.qualified_vars();
+        let vars = self.build_qualified_vars();
         for (qname, val) in &vars {
             let v0 = self.ssa.current_name(qname);
             self.declare(&v0, "Real");
@@ -328,6 +345,9 @@ impl SmtWriter {
     }
 
     /// Encode an if-then-else with branch tracking.
+    ///
+    /// SSA scheme: run then-branch in `self.ssa` to generate assignment versions,
+    /// then create phi versions. The "else" values are the pre-branch versions.
     fn encode_if(
         &mut self,
         cond: &Expr,
@@ -340,51 +360,36 @@ impl SmtWriter {
 
         let cond_smt = self.encode_expr(cond);
 
-        // Save SSA state before branches
+        // Snapshot before: else-branch keeps these versions
         let mut ssa_before = self.ssa.clone();
 
         // Collect variables modified in then branch
         let then_modified = collect_modified_vars(then_branch);
 
-        // Encode then branch: get new versions of modified vars
-        let mut ssa_then = ssa_before.clone();
-        for var in &then_modified {
-            let new_name = ssa_then.next_name(var);
-            self.declare(&new_name, "Real");
-        }
-
-        // Temporarily use then SSA to encode then-branch assignments
-        let saved_ssa = std::mem::replace(&mut self.ssa, ssa_then.clone());
+        // Run then branch → FlowAssigns create intermediate versions
         for stmt in then_branch {
             self.encode_stmt(stmt, prog);
         }
-        ssa_then = self.ssa.clone();
-        self.ssa = saved_ssa;
 
-        // Use ITE for each modified variable
-        // Track what version each modified var has after then vs else
+        // Capture then-branch versions, then create phi versions
         let mut then_vers = Vec::new();
         let mut else_vers = Vec::new();
         let mut phi_vers = Vec::new();
 
         for var in &then_modified {
-            let then_ver = ssa_then.current_name(var);
-            let else_ver = ssa_before.current_name(var);
-            let phi_ver = self.ssa.next_name(var);
-            self.declare(&phi_ver, "Real");
-
-            then_vers.push(then_ver);
-            else_vers.push(else_ver);
-            phi_vers.push(phi_ver);
+            then_vers.push(self.ssa.current_name(var));
+            else_vers.push(ssa_before.current_name(var));
+            let phi = self.ssa.next_name(var);
+            self.declare(&phi, "Real");
+            phi_vers.push(phi);
         }
 
-        // Generate block tracking booleans
+        // Block tracking booleans
         let true_name = format!("block{}true_{}", block_id, 1);
         let false_name = format!("block{}false_{}", block_id, 1);
         self.declare(&true_name, "Bool");
         self.declare(&false_name, "Bool");
 
-        // Build the ITE assertion
         if !then_modified.is_empty() {
             let mut then_parts = vec![
                 format!("(= {} true)", true_name),
@@ -409,7 +414,7 @@ impl SmtWriter {
 
             // Exclusivity constraint
             self.assert_smt(&format!(
-                "(or (and {} (not {})) (and (not {}) {}))",
+                "(or (and {}\n(not {}))\n(and (not {})\n{}))",
                 true_name, false_name, true_name, false_name
             ));
         }
@@ -558,15 +563,13 @@ impl SmtWriter {
     }
 
     /// Encode an expression using variable versions at a specific round.
-    /// Uses the SSA state to find the right version at each round boundary.
     fn encode_expr_at_round(&self, expr: &Expr, round: u64) -> String {
         match expr {
             Expr::Lit(val) => val_to_smt(val),
             Expr::Var(name) => {
-                // Use round-indexed version if this is a known qualified var
-                // For invariants, use the version at the end of that round
-                let versioned = format!("{}_{}", name, round);
-                versioned
+                // Resolve through name_map (invariant stock refs → qualified)
+                let resolved = self.name_map.get(name).cloned().unwrap_or(name.clone());
+                format!("{}_{}", resolved, round)
             }
             Expr::BinOp { op, left, right } => {
                 let l = self.encode_expr_at_round(left, round);
@@ -880,5 +883,159 @@ mod tests {
         assert!(!smt.contains("(= unknowns_loop_data_a_0"));
         // `b` has value → initial constraint
         assert!(smt.contains("(= unknowns_loop_data_b_0 2.0)"));
+    }
+
+    // ── Integration tests: parse → resolve → encode ─────────────────
+
+    /// Helper: normalize SMT for comparison (strip blank lines, trim).
+    fn normalize_smt(s: &str) -> Vec<String> {
+        s.lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn e2e_unknowns() {
+        let src = r#"spec unknowns;
+
+def s = stock{
+    a,
+    b: 2,
+    c: 0,
+};
+
+def f = flow{
+    data: new s,
+    fn: func{
+       data.c <- data.a + data.b;
+    },
+};
+
+assume s.a > 5;
+assert s.a <= 6;
+
+for 3 init{loop = new f;} run {
+    loop.fn;
+}"#;
+
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        let lines = normalize_smt(&smt);
+
+        // Declarations
+        assert!(lines.contains(&"(set-logic QF_NRA)".into()));
+        assert!(lines.contains(&"(declare-fun unknowns_loop_data_a_0 () Real)".into()));
+        assert!(lines.contains(&"(declare-fun unknowns_loop_data_b_0 () Real)".into()));
+        assert!(lines.contains(&"(declare-fun unknowns_loop_data_c_0 () Real)".into()));
+        assert!(lines.contains(&"(declare-fun unknowns_loop_data_c_1 () Real)".into()));
+        assert!(lines.contains(&"(declare-fun unknowns_loop_data_c_2 () Real)".into()));
+        assert!(lines.contains(&"(declare-fun unknowns_loop_data_c_3 () Real)".into()));
+
+        // Initial values
+        assert!(lines.contains(&"(assert (= unknowns_loop_data_b_0 2.0))".into()));
+        assert!(lines.contains(&"(assert (= unknowns_loop_data_c_0 0.0))".into()));
+        // No initial constraint for a (unknown)
+        assert!(!smt.contains("(= unknowns_loop_data_a_0"));
+
+        // Round assignments
+        assert!(lines.contains(
+            &"(assert (= unknowns_loop_data_c_1 (+ unknowns_loop_data_c_0 (+ unknowns_loop_data_a_0 unknowns_loop_data_b_0))))"
+                .into()
+        ));
+    }
+
+    #[test]
+    fn e2e_asserts() {
+        let src = r#"spec asserts;
+
+def fsample = flow{
+    target: new ssample,
+    fn: func{
+        target.value -> target.value/2;
+    },
+};
+
+def ssample = stock{
+    value: 40,
+};
+
+assert ssample.value == 40;
+assume fsample.target.value > 2;
+
+for 4 init{test = new fsample;} run {
+    test.fn;
+}"#;
+
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        let lines = normalize_smt(&smt);
+
+        // Initial value
+        assert!(lines.contains(&"(assert (= asserts_test_target_value_0 40.0))".into()));
+
+        // Outflow: target.value -> target.value/2  →  val_new = val_old - (val_old/2)
+        assert!(lines.contains(
+            &"(assert (= asserts_test_target_value_1 (- asserts_test_target_value_0 (/ asserts_test_target_value_0 2.0))))"
+                .into()
+        ));
+
+        // Assertion negated (or of not-equal for each round)
+        assert!(smt.contains("(or (not (= asserts_test_target_value_0 40.0))"));
+
+        // Assumption not negated (and of greater-than for each round)
+        assert!(smt.contains("(and (> asserts_test_target_value_0 2.0)"));
+    }
+
+    #[test]
+    fn e2e_simple_a() {
+        let src = r#"spec simpleA;
+
+def st = stock{
+    value: 30,
+};
+
+def fl = flow{
+    active: false,
+    vault: new st,
+    fn: func{
+        if vault.value > 4 {
+           vault.value <- vault.value - 2;
+        }
+    },
+};
+
+for 1 init{l = new fl;} run {
+    l.fn;
+}"#;
+
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        let lines = normalize_smt(&smt);
+
+        // Declarations
+        assert!(lines.contains(&"(declare-fun simpleA_l_vault_value_0 () Real)".into()));
+        assert!(lines.contains(&"(declare-fun simpleA_l_vault_value_1 () Real)".into()));
+        assert!(lines.contains(&"(declare-fun simpleA_l_vault_value_2 () Real)".into()));
+
+        // Initial value
+        assert!(lines.contains(&"(assert (= simpleA_l_vault_value_0 30.0))".into()));
+
+        // Inflow assignment inside if: val_1 = val_0 + (val_0 - 2.0)
+        assert!(lines.contains(
+            &"(assert (= simpleA_l_vault_value_1 (+ simpleA_l_vault_value_0 (- simpleA_l_vault_value_0 2.0))))"
+                .into()
+        ));
+
+        // ITE with phi
+        assert!(smt.contains("(ite (> simpleA_l_vault_value_0 4.0)"));
+        assert!(smt.contains("simpleA_l_vault_value_2 simpleA_l_vault_value_1"));
+        assert!(smt.contains("simpleA_l_vault_value_2 simpleA_l_vault_value_0"));
     }
 }

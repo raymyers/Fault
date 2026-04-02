@@ -164,12 +164,16 @@ Strategy: use `pest`, `lalrpop`, or a hand-written recursive-descent parser targ
 
 ## Milestone 9 — Solver Integration & End-to-End
 
-- [ ] Shell out to Z3 (or use z3-sys crate) with generated SMT-LIB2
-- [ ] Parse solver response: `sat` (counterexample found) / `unsat` (correct) / `unknown`
-- [ ] Extract model values on `sat`
-- [ ] CLI: `fault-rust -f input.fspec` → counterexample or "correct"
-- [ ] CLI: `fault-rust -m smt -f input.fspec` → print SMT encoding
-- [ ] **End-to-end data test:** for all fixtures, run full pipeline, compare results against Go oracle
+- [x] Shell out to Z3 with generated SMT-LIB2 (SOLVERCMD/SOLVERARG env vars)
+- [x] Parse solver response: `sat` / `unsat` / `unknown`
+- [x] Extract model values on `sat`
+- [x] CLI: `fault-rust -f input.fspec` → counterexample or "correct"
+- [x] CLI: `fault-rust -m smt -f input.fspec` → print SMT encoding
+- [x] CLI: `fault-rust -m parse -f input.fspec` → dump AST (debug)
+- [x] Fixed: spec name from parsed `spec` declaration, not filename
+- [x] Fixed: invariant name resolution via name_map (stock→qualified)
+- [x] Fixed: if-then-else SSA versioning (correct phi nodes)
+- [x] **End-to-end data test:** 3 e2e tests (simpleA, asserts, unknowns) — structurally matching Go oracle output
 
 ---
 
