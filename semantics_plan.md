@@ -285,7 +285,7 @@ Leverage CSLib's built-in theory to prove structural properties of FaultLTS.
 - [x] Build test harness: shell out to Go compiler, capture `-m ir` and `-m smt` output
 - [ ] Write Lean parsers for LLVM IR and SMT-LIB2 output
 - [x] Trace comparison: run Lean semantics on test inputs, compare reachable states with Go
-- [ ] Counterexample validation: verify Go SAT results produce matching Lean LTS traces
+- [x] Counterexample validation: verify Go SAT results produce matching Lean LTS traces
 - [x] SMT equivalence: compare Go-generated SMT with Lean-derived constraints (small models)
 - [x] Verify each specific equivalence in the table below (10 properties)
 - [ ] (Stretch) Mechanized bisimulation: `GoStyleLTS` ∼ `FaultLTS`
@@ -368,7 +368,7 @@ Phase 0 ──→ Phase 1 ──→ Phase 2 ──→ Phase 3 ──→ Phase 4
 
 ### Milestone 2: Assertions and temporal logic
 - [x] Phase 4 complete
-- [ ] Oracle test: assert counterexamples match Go compiler on `battery.fspec`
+- [x] Oracle test: assert counterexamples match Go compiler on `battery.fspec`
 
 ### Milestone 3: Components and .fsystem
 - [ ] Phase 3 extended with component/state transitions
