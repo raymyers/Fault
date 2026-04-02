@@ -154,3 +154,31 @@ theorem always_implies_eventuallyAlways (P : FaultState → Prop) (states : List
   · match states, hne with | _ :: _, _ => simp
   · intro σ hMem
     exact hAll σ (List.drop_subset _ _ hMem)
+
+/-! ## Snapshot Invariants -/
+
+/-- Snapshotting records the current env value for variables in the list. -/
+theorem snapshot_records_current (σ : FaultState) (vars : List Name) (x : Name)
+    (hx : x ∈ vars) :
+    (σ.snapshot vars).history x σ.round = σ.env x := by
+  simp [FaultState.snapshot]
+  intro h
+  exact absurd hx h
+
+/-- Snapshotting does not alter history at rounds other than the current one. -/
+theorem snapshot_preserves_past (σ : FaultState) (vars : List Name) (x : Name) (n : Nat)
+    (hn : n ≠ σ.round) :
+    (σ.snapshot vars).history x n = σ.history x n := by
+  simp [FaultState.snapshot]
+  intro h
+  exact absurd h hn
+
+/-- Snapshotting does not change the environment. -/
+theorem snapshot_preserves_env (σ : FaultState) (vars : List Name) :
+    (σ.snapshot vars).env = σ.env := by
+  rfl
+
+/-- Snapshotting does not change the round counter. -/
+theorem snapshot_preserves_round (σ : FaultState) (vars : List Name) :
+    (σ.snapshot vars).round = σ.round := by
+  rfl
