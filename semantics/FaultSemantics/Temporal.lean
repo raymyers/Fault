@@ -150,7 +150,7 @@ theorem nmt_zero_iff_always_not (P : FaultState → Prop) (states : List FaultSt
     simp at this
   · intro h l hSub hAll
     by_contra hgt
-    push_neg at hgt
+    push Not at hgt
     match l, hgt with
     | σ :: _, _ =>
       exact h σ (hSub (List.mem_cons_self ..)) (hAll σ (List.mem_cons_self ..))
