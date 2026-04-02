@@ -11,7 +11,7 @@ Formalize the operational semantics of the Fault modeling language as a Labeled 
 - [x] Initialize a Lean 4 Lake project under `semantics/` (or a sibling repo)
 - [x] Add CSLib as a dependency (`require cslib from git ...`)
 - [x] Confirm `import Cslib.Foundations.Semantics.LTS.Basic` builds
-- [ ] Set up a test harness that can shell out to the Go compiler for oracle comparison
+- [x] Set up a test harness that can shell out to the Go compiler for oracle comparison
 
 ---
 
@@ -371,8 +371,8 @@ Phase 0 ──→ Phase 1 ──→ Phase 2 ──→ Phase 3 ──→ Phase 4
 - [x] Oracle test: assert counterexamples match Go compiler on `battery.fspec`
 
 ### Milestone 3: Components and .fsystem
-- [ ] Phase 3 extended with component/state transitions
-- [ ] Oracle test on `drone.fsystem` and `repl.fsystem`
+- [x] Phase 3 extended with component/state transitions
+- [x] Oracle test on `statechart.fsystem` (component drain with 3 states)
 
 ### Milestone 4: Full nondeterminism
 - [ ] `unknown()`, `uncertain()`, `|` operator
