@@ -94,7 +94,7 @@ fn print_usage() {
     eprintln!("  check  Check model with Z3 solver (default)");
 }
 
-fn run_smt_mode(src: &str, _spec_name: &str, base_dir: &Path) {
+fn parse_and_validate(src: &str, base_dir: &Path) -> fault_syntax::Spec {
     let mut spec = match fault_syntax::parser::parse_spec(src) {
         Ok(s) => s,
         Err(e) => {
@@ -107,6 +107,19 @@ fn run_smt_mode(src: &str, _spec_name: &str, base_dir: &Path) {
         fault_resolve::loader::load_imports(&mut spec, base_dir);
     }
 
+    let errors = fault_resolve::validate::validate_spec(&spec);
+    if !errors.is_empty() {
+        for e in &errors {
+            eprintln!("{}", e);
+        }
+        process::exit(1);
+    }
+
+    spec
+}
+
+fn run_smt_mode(src: &str, _spec_name: &str, base_dir: &Path) {
+    let spec = parse_and_validate(src, base_dir);
     let name = spec.name.clone();
     let resolved = fault_resolve::resolve_spec(spec);
     let smt = fault_smt::encode_program(&resolved, &name);
@@ -126,18 +139,7 @@ fn run_parse_mode(src: &str) {
 }
 
 fn run_check_mode(src: &str, _spec_name: &str, base_dir: &Path) {
-    let mut spec = match fault_syntax::parser::parse_spec(src) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("parse error: {}", e);
-            process::exit(1);
-        }
-    };
-
-    if !spec.import_decls.is_empty() {
-        fault_resolve::loader::load_imports(&mut spec, base_dir);
-    }
-
+    let spec = parse_and_validate(src, base_dir);
     let name = spec.name.clone();
     let resolved = fault_resolve::resolve_spec(spec);
     let smt = fault_smt::encode_program(&resolved, &name);

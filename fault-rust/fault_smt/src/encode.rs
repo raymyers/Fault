@@ -6,7 +6,7 @@
 //! 3. Walk run block N rounds, SSA-versioning each assignment
 //! 4. Encode assertions (negated) and assumptions (not negated)
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use crate::ssa::Ssa;
 use fault_resolve::ResolvedProgram;
@@ -22,28 +22,28 @@ struct SmtWriter {
     /// spec name prefix.
     spec_name: String,
     /// instance_name → flow_type_name (from init block).
-    instances: HashMap<String, String>,
+    instances: BTreeMap<String, String>,
     /// flow_type_name → { stock_ref_name → stock_type_name }.
-    flow_stocks: HashMap<String, Vec<(String, String)>>,
+    flow_stocks: BTreeMap<String, Vec<(String, String)>>,
     /// stock_type_name → [(property_name, initial_value)].
-    stock_props: HashMap<String, Vec<(String, Val)>>,
+    stock_props: BTreeMap<String, Vec<(String, Val)>>,
     /// flow_type_name → { func_name → body }.
-    flow_funcs: HashMap<String, Vec<(String, Vec<Stmt>)>>,
+    flow_funcs: BTreeMap<String, Vec<(String, Vec<Stmt>)>>,
     /// Variables whose initial value is unknown (no constraint).
     unknown_vars: Vec<String>,
     /// Counter for generating unique block names.
     block_counter: u32,
     /// Map from unqualified/resolved names → qualified names.
     /// E.g., "s_a" → "unknowns_loop_data_a" for invariant resolution.
-    name_map: HashMap<String, String>,
+    name_map: BTreeMap<String, String>,
     /// Qualified var name → sort ("Real" or "Bool").
-    var_sorts: HashMap<String, &'static str>,
+    var_sorts: BTreeMap<String, &'static str>,
     /// Stock target reassignments from init: "inst.stock_ref" → "target_instance".
-    target_swaps: HashMap<String, String>,
+    target_swaps: BTreeMap<String, String>,
     /// Property value overrides from init: "inst.prop" → override value.
-    prop_overrides: HashMap<String, Val>,
+    prop_overrides: BTreeMap<String, Val>,
     /// Per-round entry SSA versions: round → { qualified_var → versioned_name }.
-    round_entries: Vec<HashMap<String, String>>,
+    round_entries: Vec<BTreeMap<String, String>>,
     /// All qualified variable names (for tracking round entries).
     all_vars: Vec<String>,
     /// Optional override SSA for expression reads (used in else-branch/parallel encoding).
@@ -59,16 +59,16 @@ impl SmtWriter {
             declarations: Vec::new(),
             assertions: Vec::new(),
             spec_name: spec_name.to_string(),
-            instances: HashMap::new(),
-            flow_stocks: HashMap::new(),
-            stock_props: HashMap::new(),
-            flow_funcs: HashMap::new(),
+            instances: BTreeMap::new(),
+            flow_stocks: BTreeMap::new(),
+            stock_props: BTreeMap::new(),
+            flow_funcs: BTreeMap::new(),
             unknown_vars: Vec::new(),
             block_counter: 0,
-            name_map: HashMap::new(),
-            var_sorts: HashMap::new(),
-            target_swaps: HashMap::new(),
-            prop_overrides: HashMap::new(),
+            name_map: BTreeMap::new(),
+            var_sorts: BTreeMap::new(),
+            target_swaps: BTreeMap::new(),
+            prop_overrides: BTreeMap::new(),
             round_entries: Vec::new(),
             all_vars: Vec::new(),
             read_ssa: None,
@@ -393,7 +393,7 @@ impl SmtWriter {
 
     /// Snapshot current SSA versions as round entry points for history references.
     fn snapshot_round_entry(&mut self) {
-        let mut entry = HashMap::new();
+        let mut entry = BTreeMap::new();
         let vars = self.all_vars.clone();
         for var in &vars {
             entry.insert(var.clone(), self.ssa.current_name(var));

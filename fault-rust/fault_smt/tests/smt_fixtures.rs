@@ -67,20 +67,12 @@ fn check_fixture(name: &str) {
         name
     );
 
-    // Run again to verify set-level determinism (same assertions produced).
-    // Use token-sorted comparison since HashMap iteration order may
-    // reorder sub-expressions within assertions.
+    // Run again to verify determinism (BTreeMap ensures consistent ordering).
     let actual2 = encode_program(&resolve_spec(parse_spec(&input).unwrap()), &spec_name);
     let (_, asserts2) = normalize(&actual2);
-
-    fn sort_tokens(s: &str) -> Vec<String> {
-        let mut tokens: Vec<String> = s.split_whitespace().map(String::from).collect();
-        tokens.sort();
-        tokens
-    }
-    let mut sorted1: Vec<Vec<String>> = asserts.iter().map(|a| sort_tokens(a)).collect();
+    let mut sorted1 = asserts.clone();
     sorted1.sort();
-    let mut sorted2: Vec<Vec<String>> = asserts2.iter().map(|a| sort_tokens(a)).collect();
+    let mut sorted2 = asserts2;
     sorted2.sort();
     assert_eq!(
         sorted1, sorted2,

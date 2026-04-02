@@ -8,6 +8,7 @@
 //! - Build `ResolvedProgram` for execution
 
 pub mod loader;
+pub mod validate;
 
 use std::collections::HashMap;
 

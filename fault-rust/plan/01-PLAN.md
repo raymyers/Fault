@@ -188,7 +188,7 @@ Strategy: use `pest`, `lalrpop`, or a hand-written recursive-descent parser targ
 - [x] String-as-boolean (`Str → Bool(false)`) — `strings.fspec`
 - [x] Stock swaps — `swaps/` directory
 - [x] Multi-file imports — `imports/` directory
-- [ ] Bad spec error reporting — `badspecs/` directory
+- [x] Bad spec error reporting — `badspecs/` directory
 - [x] Indexes — `indexes.fspec`
 - [x] `bathtub2.fspec` (multiple parallel flows)
 - [ ] Full statechart system — `statecharts/`
