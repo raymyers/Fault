@@ -45,16 +45,6 @@ theorem faultStep_advance_preserves_other (σ : FaultState) (c₁ c₂ newState 
 
 /-! ## Determinism Analysis -/
 
-/-- A Fault model is deterministic-on-label if, given the same state and label,
-    there is at most one successor state.
-
-    Note: FaultLTS is NOT deterministic in general due to:
-    - `unknown()` values (free solver variables)
-    - `uncertain()` values
-    - `choose` expressions
-    - `|` parallel operator (nondeterministic interleaving)
-
-    But for the core transition rules (without nondeterminism), it is. -/
 theorem faultStep_assign_deterministic (σ : FaultState) (x : Name) (op : FlowOp)
     (e₁ e₂ : Expr) :
     eval σ e₁ = eval σ e₂ →
@@ -76,15 +66,35 @@ theorem execRounds_zero (σ : FaultState) (runBody : List Stmt) (vars : List Nam
 
 /-! ## Round Counter Monotonicity -/
 
+mutual
 /-- Statement execution preserves the round counter.
-    Only `roundStep` (in `ExecRound`) changes the round. -/
-theorem execStmt_preserves_round (σ σ' : FaultState) (s : Stmt) (μs : List Label) :
-    ExecStmt σ s μs σ' → σ'.round = σ.round := by
-  sorry  -- requires mutual induction on ExecStmt/ExecStmts
+    Uses mutual def since Lean 4 mutual blocks require def, not theorem. -/
+def execStmt_preserves_round (σ σ' : FaultState) (s : Stmt) (μs : List Label)
+    (h : ExecStmt σ s μs σ') : σ'.round = σ.round :=
+  match s, μs, h with
+  | _, _, .flowAssign _ x op e => by simp [FaultState.setVar]
+  | _, _, .ifTrue _ _ cond thenB elseB μs₂ hCond hBody =>
+    execStmts_preserves_round _ _ _ _ hBody
+  | _, _, .ifFalse _ _ cond thenB elseB μs₂ hCond hBody =>
+    execStmts_preserves_round _ _ _ _ hBody
+  | _, _, .call _ _ funcName body μs₂ hBody =>
+    execStmts_preserves_round _ _ _ _ hBody
+  | _, _, .advance _ target comp newState => by simp [FaultState.setCompState]
+  | _, _, .stay _ => rfl
+  | _, _, .seq _ _ stmts μs₂ hBody =>
+    execStmts_preserves_round _ _ _ _ hBody
+  | _, _, .parallel _ _ stmts perm μs₂ hPerm hBody =>
+    execStmts_preserves_round _ _ _ _ hBody
 
-theorem execStmts_preserves_round (σ σ' : FaultState) (ss : List Stmt) (μs : List Label) :
-    ExecStmts σ ss μs σ' → σ'.round = σ.round := by
-  sorry  -- requires mutual induction on ExecStmt/ExecStmts
+def execStmts_preserves_round (σ σ' : FaultState) (ss : List Stmt) (μs : List Label)
+    (h : ExecStmts σ ss μs σ') : σ'.round = σ.round :=
+  match ss, μs, h with
+  | _, _, .nil _ => rfl
+  | _, _, .cons _ σ_mid _ _ _ _ _ hStmt hRest =>
+    have h1 := execStmt_preserves_round _ _ _ _ hStmt
+    have h2 := execStmts_preserves_round _ _ _ _ hRest
+    by omega
+end
 
 /-- After executing a round, the round counter increases by 1 -/
 theorem execRound_increments_round (σ σ' : FaultState) (runBody : List Stmt)

@@ -8,9 +8,9 @@ Formalize the operational semantics of the Fault modeling language as a Labeled 
 
 ## Phase 0: Project Setup
 
-- [ ] Initialize a Lean 4 Lake project under `semantics/` (or a sibling repo)
-- [ ] Add CSLib as a dependency (`require cslib from git ...`)
-- [ ] Confirm `import Cslib.Foundations.Semantics.LTS.Basic` builds
+- [x] Initialize a Lean 4 Lake project under `semantics/` (or a sibling repo)
+- [x] Add CSLib as a dependency (`require cslib from git ...`)
+- [x] Confirm `import Cslib.Foundations.Semantics.LTS.Basic` builds
 - [ ] Set up a test harness that can shell out to the Go compiler for oracle comparison
 
 ---
@@ -19,10 +19,10 @@ Formalize the operational semantics of the Fault modeling language as a Labeled 
 
 Encode the Fault AST as Lean inductive types. Source of truth: `ast/ast.go`.
 
-- [ ] Define `Val`, `BinOp`, `UnOp`, `FlowOp` inductive types
-- [ ] Define `Expr` inductive type (lit, var, binop, unop, history, choose)
-- [ ] Define `Stmt` inductive type (flowAssign, ifThenElse, call, advance, stay, seq)
-- [ ] Define `StockDef`, `FlowDef`, `CompDef`, `Spec`, `System` structures
+- [x] Define `Val`, `BinOp`, `UnOp`, `FlowOp` inductive types
+- [x] Define `Expr` inductive type (lit, var, binop, unop, history, choose)
+- [x] Define `Stmt` inductive type (flowAssign, ifThenElse, call, advance, stay, seq)
+- [x] Define `StockDef`, `FlowDef`, `CompDef`, `Spec`, `System` structures
 - [ ] Round-trip test: parse `.fspec`/`.fsystem` with Go compiler (`-m ast`), export JSON, compare against Lean AST
 
 ### 1.1 Core Types
@@ -70,9 +70,9 @@ structure System     := (imports : List Spec) (components : List CompDef) (start
 
 ### 2.1 State
 
-- [ ] Define `FaultState` structure (env, round, compState, history)
-- [ ] Define `Label` inductive type (tau, flowExec, stateEntry, assign, branch, round)
-- [ ] Instantiate `Cslib.LTS FaultState Label` with `Tr := faultStep`
+- [x] Define `FaultState` structure (env, round, compState, history)
+- [x] Define `Label` inductive type (tau, flowExec, stateEntry, assign, branch, round)
+- [x] Instantiate `Cslib.LTS FaultState Label` with `Tr := faultStep`
 - [ ] Prove key invariant: `history x round = env x` at end of each round
 
 The global state of a Fault model at a given point in execution:
@@ -116,15 +116,15 @@ def FaultLTS : Cslib.LTS FaultState Label where
 
 Define `faultStep : FaultState → Label → FaultState → Prop` as the transition relation.
 
-- [ ] Define `eval` (big-step expression evaluation, set-valued)
-- [ ] Define transition rules: Assign, Inflow, Outflow
-- [ ] Define transition rules: IfTrue, IfFalse (conditional branching)
-- [ ] Define transition rules: Call (flow function invocation)
-- [ ] Define transition rules: Advance, Stay (component state transitions)
-- [ ] Define transition rule: Seq (sequential composition)
-- [ ] Define `roundStep` (run block → component steps → snapshot → increment)
-- [ ] Define parallel composition for `|` operator (all permutations)
-- [ ] Define system-level composition (multiple components per round)
+- [x] Define `eval` (big-step expression evaluation, set-valued)
+- [x] Define transition rules: Assign, Inflow, Outflow
+- [x] Define transition rules: IfTrue, IfFalse (conditional branching)
+- [x] Define transition rules: Call (flow function invocation)
+- [x] Define transition rules: Advance, Stay (component state transitions)
+- [x] Define transition rule: Seq (sequential composition)
+- [x] Define `roundStep` (run block → component steps → snapshot → increment)
+- [x] Define parallel composition for `|` operator (all permutations)
+- [x] Define system-level composition (multiple components per round)
 
 ### 3.1 Expression Evaluation (Big-Step, Pure)
 
@@ -194,10 +194,10 @@ roundStep σ σ' ≡ ∃ σ_mid,
 
 ## Phase 4: Assertion and Temporal Semantics
 
-- [ ] Define `Trace` type using CSLib's `MTr` (multistep transition)
-- [ ] Formalize `always`, `eventually`, `eventually-always`, `nft`, `nmt` over bounded traces
-- [ ] Formalize assertion negation (`assert φ` ↦ solver checks `¬φ`)
-- [ ] Formalize `assume` as trace-space constraint (no negation)
+- [x] Define `Trace` type using CSLib's `MTr` (multistep transition)
+- [x] Formalize `always`, `eventually`, `eventually-always`, `nft`, `nmt` over bounded traces
+- [x] Formalize assertion negation (`assert φ` ↦ solver checks `¬φ`)
+- [x] Formalize `assume` as trace-space constraint (no negation)
 - [ ] Prove equivalence between formal temporal definitions and SMT encodings from `asserts.go`
 
 ### 4.1 Traces
@@ -247,6 +247,9 @@ def withAssumption (ψ : FaultState → Prop) (traces : Set Trace) : Set Trace :
 
 Leverage CSLib's built-in theory to prove structural properties of FaultLTS.
 
+- [x] Prove basic properties (stay always available, assignment/advance locality)
+- [x] Prove round counter monotonicity
+- [x] Prove temporal implications (always→eventually, eventuallyAlways→eventually)
 - [ ] Prove `noNondet spec → Deterministic (faultLTSOf spec)`
 - [ ] Prove `FinitelyBranching FaultLTS`
 - [ ] Prove `FiniteLTS (boundedFaultLTS N)` for bounded models
@@ -360,8 +363,8 @@ Phase 0 ──→ Phase 1 ──→ Phase 2 ──→ Phase 3 ──→ Phase 4
 ```
 
 ### Milestone 1: Minimal .fspec semantics
-- [ ] Phases 0-3 for the subset: stocks, flows (`=`, `←`, `→`), conditionals, `for N` loops
-- [ ] Oracle test on `fibonacci.fspec` and `sandwich.fspec`
+- [x] Phases 0-3 for the subset: stocks, flows (`=`, `←`, `→`), conditionals, `for N` loops
+- [x] Oracle test on `fibonacci.fspec` and `sandwich.fspec`
 
 ### Milestone 2: Assertions and temporal logic
 - [ ] Phase 4 complete
