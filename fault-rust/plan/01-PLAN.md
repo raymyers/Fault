@@ -47,14 +47,14 @@ Additional Lean-derived test vectors live in `fault-rust/testdata/lean/` and are
 
 ## Milestone 1 — AST / Syntax (`Syntax.lean`)
 
-- [ ] Define `Val` enum (`Nat`, `Float`, `Bool`, `Str`, `Unknown`, `Uncertain(f64,f64)`, `Nil`)
-- [ ] Define `BinOp`, `UnOp`, `FlowOp` enums
-- [ ] Define `Expr` enum (`Lit`, `Var`, `BinOp`, `UnOp`, `Dot`, `History`, `Choose`)
-- [ ] Define `Stmt` enum (`FlowAssign`, `IfThenElse`, `Call`, `Advance`, `Stay`, `Seq`, `Parallel`)
-- [ ] Define `Temporal` enum (`Always`, `Eventually`, `EventuallyAlways`, `Nmt(u64)`, `Nft(u64)`)
-- [ ] Define `Invariant` enum (`Assert`, `Assume`, `AssertWhen`, `AssumeWhen`)
-- [ ] Define `StockDef`, `FlowDef`, `CompDef`, `Spec`, `System` structs
-- [ ] Serde JSON round-trip tests against a hand-written AST snapshot
+- [x] Define `Val` enum (`Nat`, `Float`, `Bool`, `Str`, `Unknown`, `Uncertain(f64,f64)`, `Nil`)
+- [x] Define `BinOp`, `UnOp`, `FlowOp` enums
+- [x] Define `Expr` enum (`Lit`, `Var`, `BinOp`, `UnOp`, `Dot`, `History`, `Choose`)
+- [x] Define `Stmt` enum (`FlowAssign`, `IfThenElse`, `Call`, `Advance`, `Stay`, `Seq`, `Parallel`)
+- [x] Define `Temporal` enum (`Always`, `Eventually`, `EventuallyAlways`, `Nmt(u64)`, `Nft(u64)`)
+- [x] Define `Invariant` enum (`Assert`, `Assume`, `AssertWhen`, `AssumeWhen`)
+- [x] Define `StockDef`, `FlowDef`, `CompDef`, `Spec`, `System` structs
+- [x] Serde JSON round-trip tests against a hand-written AST snapshot
 
 ---
 

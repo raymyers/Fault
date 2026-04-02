@@ -34,3 +34,4 @@ grammar/Makefile
 
 __pycache__
 dist/
+fault_bin
