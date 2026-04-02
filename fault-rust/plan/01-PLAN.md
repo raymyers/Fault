@@ -74,15 +74,15 @@ Strategy: use `pest`, `lalrpop`, or a hand-written recursive-descent parser targ
 
 ## Milestone 3 — Name Resolution (`Resolve.lean`)
 
-- [ ] `flatten_name(parts: &[&str]) -> String` — join with `_`
-- [ ] Scope context: prepend `[spec_name] ++ scope_parts` to identifiers
-- [ ] Alias resolution (stock swaps): recursive lookup with cycle limit (`Resolve.lean:49`)
-- [ ] `resolve_expr`: eliminate `Expr::Dot` → `Expr::Var(flat_name)` (`Resolve.lean:68`)
-- [ ] `resolve_stmt`, `resolve_invariant`: walk full AST
-- [ ] Import resolution for `.fsystem`: merge stocks/flows/constants, keep invariants, ignore imported run blocks (`Resolve.lean:108`)
-- [ ] Component validation: state functions must not contain `FlowAssign` (`Resolve.lean:134`)
-- [ ] Build `ResolvedProgram` struct (`Resolve.lean:158`)
-- [ ] **Data test:** resolve fixtures, compare flattened names against Go compiler output
+- [x] `flatten_name(parts: &[&str]) -> String` — join with `_`
+- [x] Scope context: prepend `[spec_name] ++ scope_parts` to identifiers
+- [x] Alias resolution (stock swaps): recursive lookup with cycle limit (`Resolve.lean:49`)
+- [x] `resolve_expr`: eliminate `Expr::Dot` → `Expr::Var(flat_name)` (`Resolve.lean:68`)
+- [x] `resolve_stmt`, `resolve_invariant`: walk full AST
+- [x] Import resolution for `.fsystem`: merge stocks/flows/constants, keep invariants, ignore imported run blocks (`Resolve.lean:108`)
+- [x] Component validation: state functions must not contain `FlowAssign` (`Resolve.lean:134`)
+- [x] Build `ResolvedProgram` struct (`Resolve.lean:158`)
+- [x] **Data test:** resolve fixtures, verify no Dot nodes remain after resolution
 
 ---
 
