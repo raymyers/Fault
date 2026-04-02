@@ -88,12 +88,20 @@ theorem parallel_permutation_valid (σ : FaultState) (stmts : List Stmt)
 theorem independent_assigns_commute (σ : FaultState) (x y : Name)
     (vx vy : SVal) (hne : x ≠ y) :
     (σ.setVar x vx).setVar y vy = (σ.setVar y vy).setVar x vx := by
-  sorry  -- requires reasoning about String BEq; not on critical path
+  simp only [FaultState.setVar]
+  congr 1
+  funext z
+  simp only [Env.update]
+  by_cases hz_y : z == y <;> by_cases hz_x : z == x <;> simp_all
 
 /-- Setting a variable twice keeps only the last value -/
 theorem setVar_idempotent (σ : FaultState) (x : Name) (v₁ v₂ : SVal) :
     (σ.setVar x v₁).setVar x v₂ = σ.setVar x v₂ := by
-  sorry  -- requires reasoning about String BEq; not on critical path
+  simp only [FaultState.setVar]
+  congr 1
+  funext z
+  simp only [Env.update]
+  by_cases hz : z == x <;> simp_all
 
 /-- Component state updates are independent of variable env updates -/
 theorem setVar_setCompState_commute (σ : FaultState) (x : Name) (v : SVal)
