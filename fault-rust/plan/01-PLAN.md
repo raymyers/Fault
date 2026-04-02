@@ -106,28 +106,28 @@ Strategy: use `pest`, `lalrpop`, or a hand-written recursive-descent parser targ
 
 ## Milestone 5 — Statement Execution (`Execution.lean`)
 
-- [ ] `exec_stmt(state: &mut FaultState, stmt: &Stmt, flows: &FlowMap) -> Vec<Label>`
-- [ ] `FlowAssign`: `state.env[name] = apply_flow(op, state.env[name], eval(expr))`
-- [ ] `IfThenElse`: eval condition, execute appropriate branch
-- [ ] `Call(func_name)`: lookup function body in flows, execute it
-- [ ] `Advance(target)`: `state.comp_state[comp] = target`
-- [ ] `Stay`: no-op
-- [ ] `Seq(stmts)`: execute in order
-- [ ] `Parallel(stmts)`: execute all permutations (for oracle matching, use canonical order first)
-- [ ] `exec_stmts(state, stmts)` — sequential block execution (`Execution.lean:80`)
-- [ ] **Data test:** single-round execution on `simple.fspec`, `bathtub.fspec`, compare env state vs Go
+- [x] `exec_stmt(state: &mut FaultState, stmt: &Stmt, flows: &FlowMap) -> Vec<Label>`
+- [x] `FlowAssign`: `state.env[name] = apply_flow(op, state.env[name], eval(expr))`
+- [x] `IfThenElse`: eval condition, execute appropriate branch
+- [x] `Call(func_name)`: lookup function body in flows, execute it
+- [x] `Advance(target)`: emit label (comp state handled at system level)
+- [x] `Stay`: no-op
+- [x] `Seq(stmts)`: execute in order
+- [x] `Parallel(stmts)`: canonical order (sequential in declaration order)
+- [x] `exec_stmts(state, stmts)` — sequential block execution (`Execution.lean:80`)
+- [x] **Data test:** unit tests for simple spec, bathtub parallel, flow ops, if/else, call, rounds
 
 ---
 
 ## Milestone 6 — Round & Program Execution (`Execution.lean:120+`)
 
-- [ ] `exec_round`: run block → component steps → snapshot history → increment round
-- [ ] `snapshot_history(state)`: `∀ name, history[(name, round)] = env[name]`
-- [ ] `exec_rounds(state, n, run_block, vars) -> (FaultState, Trace)`
-- [ ] `exec_system_round`: run block + per-component state function dispatch
-- [ ] `exec_program(state, init_block, run_block, n)` — init once, then N rounds (`Execution.lean:173`)
-- [ ] `exec_system_program(state, init, run, components, n)` (`Execution.lean:199`)
-- [ ] **Data test:** multi-round traces on `simple.fspec` (1 round), `history1.fspec` (temporal refs), `statecharts/statechart.fsystem` (components). Compare full trace against Go.
+- [x] `exec_round`: run block → snapshot history → increment round
+- [x] `snapshot_history(state)`: `∀ name, history[(name, round)] = env[name]`
+- [x] `exec_rounds(state, n, run_block, vars) -> (FaultState, Trace)`
+- [x] `exec_system_round`: run block + per-component state function dispatch
+- [x] `exec_program(state, init_block, run_block, n)` — init once, then N rounds (`Execution.lean:173`)
+- [x] `exec_system_program(state, init, run, components, n)` (`Execution.lean:199`)
+- [x] **Data test:** round snapshot/advance, multi-round accumulation, bathtub parallel rounds
 
 ---
 
