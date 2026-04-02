@@ -88,19 +88,19 @@ Strategy: use `pest`, `lalrpop`, or a hand-written recursive-descent parser targ
 
 ## Milestone 4 — State & Evaluation (`State.lean`, `LTS.lean`)
 
-- [ ] Define `SVal` enum (`Real(f64)`, `Bool(bool)`, `Nil`)
-- [ ] Define `FaultState` struct (`env: HashMap<Name, SVal>`, `round: u64`, `comp_state: HashMap<Name, Name>`, `history: HashMap<(Name, u64), SVal>`)
-- [ ] `to_sval(val: &Val) -> SVal` conversion (numerics→Real, Str→Bool(false), Unknown/Uncertain→Nil for concrete eval)
-- [ ] `build_initial_state(program: &ResolvedProgram) -> FaultState` (`State.lean:98`)
-- [ ] `eval(state: &FaultState, expr: &Expr) -> SVal` — deterministic evaluator (`LTS.lean:23`)
-- [ ] Arithmetic: `add`, `sub`, `mul`, `div`, `mod`, `exp` on reals
-- [ ] Comparison: `eq`, `neq`, `lt`, `le`, `gt`, `ge` → `SVal::Bool`
-- [ ] Logical: `and`, `or`, `not` on bools
-- [ ] `History(name, offset)` → lookup `state.history[(name, round+offset)]`
-- [ ] `Choose(exprs)` → pick first non-Nil (deterministic mode)
-- [ ] `Nil` propagation: any op with `Nil` → `Nil`
-- [ ] Flow operators: `apply_flow(op, current, value) -> SVal` (`LTS.lean:42`)
-- [ ] **Data test:** for each fixture, build initial state, eval known expressions, compare against hand-checked values
+- [x] Define `SVal` enum (`Real(f64)`, `Bool(bool)`, `Nil`)
+- [x] Define `FaultState` struct (`env: HashMap<Name, SVal>`, `round: u64`, `comp_state: HashMap<Name, Name>`, `history: HashMap<(Name, u64), SVal>`)
+- [x] `to_sval(val: &Val) -> SVal` conversion (numerics→Real, Str→Bool(false), Unknown/Uncertain→Nil for concrete eval)
+- [x] `build_initial_state(program: &ResolvedProgram) -> FaultState` (`State.lean:98`)
+- [x] `eval(state: &FaultState, expr: &Expr) -> SVal` — deterministic evaluator (`LTS.lean:23`)
+- [x] Arithmetic: `add`, `sub`, `mul`, `div`, `mod`, `exp` on reals
+- [x] Comparison: `eq`, `neq`, `lt`, `le`, `gt`, `ge` → `SVal::Bool`
+- [x] Logical: `and`, `or`, `not` on bools
+- [x] `History(name, offset)` → lookup `state.history[(name, round+offset)]`
+- [x] `Choose(exprs)` → Nil (deterministic mode; nondeterminism at SMT level)
+- [x] `Nil` propagation: any op with `Nil` → `Nil`
+- [x] Flow operators: `apply_flow(op, current, value) -> SVal` (`LTS.lean:42`)
+- [x] **Data test:** 20 unit tests covering all operations, state, history, flow ops
 
 ---
 
