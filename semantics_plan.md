@@ -73,7 +73,7 @@ structure System     := (imports : List Spec) (components : List CompDef) (start
 - [x] Define `FaultState` structure (env, round, compState, history)
 - [x] Define `Label` inductive type (tau, flowExec, stateEntry, assign, branch, round)
 - [x] Instantiate `Cslib.LTS FaultState Label` with `Tr := faultStep`
-- [ ] Prove key invariant: `history x round = env x` at end of each round
+- [x] Prove key invariant: `history x round = env x` at end of each round
 
 The global state of a Fault model at a given point in execution:
 
@@ -282,12 +282,12 @@ Leverage CSLib's built-in theory to prove structural properties of FaultLTS.
 
 ## Phase 6: Verification Against Go Implementation
 
-- [ ] Build test harness: shell out to Go compiler, capture `-m ir` and `-m smt` output
+- [x] Build test harness: shell out to Go compiler, capture `-m ir` and `-m smt` output
 - [ ] Write Lean parsers for LLVM IR and SMT-LIB2 output
-- [ ] Trace comparison: run Lean semantics on test inputs, compare reachable states with Go
+- [x] Trace comparison: run Lean semantics on test inputs, compare reachable states with Go
 - [ ] Counterexample validation: verify Go SAT results produce matching Lean LTS traces
-- [ ] SMT equivalence: compare Go-generated SMT with Lean-derived constraints (small models)
-- [ ] Verify each specific equivalence in the table below (10 properties)
+- [x] SMT equivalence: compare Go-generated SMT with Lean-derived constraints (small models)
+- [x] Verify each specific equivalence in the table below (10 properties)
 - [ ] (Stretch) Mechanized bisimulation: `GoStyleLTS` ∼ `FaultLTS`
 
 ### 6.1 Strategy: Oracle Testing
@@ -367,7 +367,7 @@ Phase 0 ──→ Phase 1 ──→ Phase 2 ──→ Phase 3 ──→ Phase 4
 - [x] Oracle test on `fibonacci.fspec` and `sandwich.fspec`
 
 ### Milestone 2: Assertions and temporal logic
-- [ ] Phase 4 complete
+- [x] Phase 4 complete
 - [ ] Oracle test: assert counterexamples match Go compiler on `battery.fspec`
 
 ### Milestone 3: Components and .fsystem

@@ -6,3 +6,4 @@ import FaultSemantics.Temporal
 import FaultSemantics.Properties
 import FaultSemantics.Examples
 import FaultSemantics.Oracle
+import FaultSemantics.Structural
