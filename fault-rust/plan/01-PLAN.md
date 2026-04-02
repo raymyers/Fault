@@ -133,16 +133,16 @@ Strategy: use `pest`, `lalrpop`, or a hand-written recursive-descent parser targ
 
 ## Milestone 7 — Temporal Logic & Assertions (`Temporal.lean`)
 
-- [ ] `check_always(trace, pred) -> bool`
-- [ ] `check_eventually(trace, pred) -> bool`
-- [ ] `check_eventually_always(trace, pred) -> bool`
-- [ ] `check_nmt(n, trace, pred) -> bool`
-- [ ] `check_nft(n, trace, pred) -> bool`
-- [ ] `check_invariant(trace, invariant) -> CheckResult`
-- [ ] Assertion negation: `assert P` → search for `¬P`
-- [ ] Assumption filtering: `assume P` → constrain, no negation
-- [ ] Conditional assertions: `assert when guard then body temp`
-- [ ] **Data test:** `asserts.fspec` — assertion pass/fail matches Go compiler
+- [x] `check_always(trace, pred) -> bool`
+- [x] `check_eventually(trace, pred) -> bool`
+- [x] `check_eventually_always(trace, pred) -> bool`
+- [x] `check_nmt(n, trace, pred) -> bool`
+- [x] `check_nft(n, trace, pred) -> bool`
+- [x] `check_invariant(trace, invariant) -> CheckResult`
+- [x] Assertion negation: `assert P` → search for `¬P` (at SMT level)
+- [x] Assumption filtering: `assume P` → constrain, no negation
+- [x] Conditional assertions: `assert when guard then body temp`
+- [x] **Data test:** 15 unit tests covering all temporal operators, invariant checking, edge cases
 
 ---
 
