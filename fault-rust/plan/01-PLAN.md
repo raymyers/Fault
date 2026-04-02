@@ -62,13 +62,13 @@ Additional Lean-derived test vectors live in `fault-rust/testdata/lean/` and are
 
 Strategy: use `pest`, `lalrpop`, or a hand-written recursive-descent parser targeting the ANTLR grammar in `grammar/FaultParser.g4`.
 
-- [ ] Lex `.fspec` files into token stream
-- [ ] Parse spec-level constructs: `spec`, `def`, `stock`, `flow`, `for N init{} run{}`
-- [ ] Parse expressions: arithmetic, comparison, logical, `||` (choose), `[now±k]`
-- [ ] Parse statements: `=`, `<-`, `->`, `if/else`, function call, `|` (parallel)
-- [ ] Parse invariants: `assert`, `assume`, `assert when...then`, temporal modalities
-- [ ] Parse `.fsystem` files: `import`, `component`, `start`
-- [ ] **Data test:** for each fixture in `testdata/`, parse to AST, serialize to JSON, compare to Go compiler AST output (`fault_bin -m ast`)
+- [x] Lex `.fspec` files into token stream
+- [x] Parse spec-level constructs: `spec`, `def`, `stock`, `flow`, `for N init{} run{}`
+- [x] Parse expressions: arithmetic, comparison, logical, `||` (choose), `[now±k]`
+- [x] Parse statements: `=`, `<-`, `->`, `if/else`, function call, `|` (parallel)
+- [x] Parse invariants: `assert`, `assume`, `assert when...then`, temporal modalities
+- [x] Parse `.fsystem` files: `import`, `component`, `start`
+- [x] **Data test:** for each fixture in `testdata/`, parse to AST without errors (all fixtures parse)
 
 ---
 

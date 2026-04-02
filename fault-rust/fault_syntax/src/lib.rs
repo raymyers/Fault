@@ -1,6 +1,9 @@
-//! AST types for the Fault modeling language.
+//! AST types and parser for the Fault modeling language.
 //!
 //! Mirrors the formal definitions in `semantics/FaultSemantics/Syntax.lean`.
+
+pub mod lexer;
+pub mod parser;
 
 use serde::{Deserialize, Serialize};
 
