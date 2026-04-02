@@ -1,14 +1,13 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! SMT-LIB2 code generation for the Fault language.
+//!
+//! Translates a resolved Fault program into QF_NRA (quantifier-free nonlinear
+//! real arithmetic) constraints. Uses SSA-style variable versioning so each
+//! assignment creates a new version: `var_0`, `var_1`, etc.
+//!
+//! Guided by `semantics/docs/implementation.md` §10 and the Go reference
+//! compiler's `generator/rules/` module.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+mod encode;
+mod ssa;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use encode::encode_program;

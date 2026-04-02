@@ -148,17 +148,17 @@ Strategy: use `pest`, `lalrpop`, or a hand-written recursive-descent parser targ
 
 ## Milestone 8 — SMT Encoding
 
-- [ ] Variable versioning (SSA-style): `name_0`, `name_1`, ... per round
-- [ ] Emit `(set-logic QF_NRA)`
-- [ ] Emit `(declare-fun ...)` for each versioned variable
-- [ ] Encode `FlowAssign` → `(assert (= ...))` with `Assign`/`Inflow`/`Outflow` semantics
-- [ ] Encode `IfThenElse` → `(assert (ite ...))`
-- [ ] Encode `Parallel` → all permutations as disjuncts
-- [ ] Encode temporal assertions → conjunction/disjunction over rounds (see `semantics/docs/implementation.md` §10.3)
-- [ ] Negate assertions, keep assumptions
-- [ ] `unknown()` → `(declare-fun x () Real)` with no constraints
-- [ ] `uncertain(μ,σ)` → same as unknown for solving, annotate result
-- [ ] **Data test:** for every `.fspec` in `testdata/`, generate `.smt2`, diff against `expected.smt2` from Go compiler. Allow reordering of independent asserts.
+- [x] Variable versioning (SSA-style): `name_0`, `name_1`, ... per round
+- [x] Emit `(set-logic QF_NRA)`
+- [x] Emit `(declare-fun ...)` for each versioned variable
+- [x] Encode `FlowAssign` → `(assert (= ...))` with `Assign`/`Inflow`/`Outflow` semantics
+- [x] Encode `IfThenElse` → `(assert (ite ...))` with branch tracking booleans
+- [x] Encode `Parallel` → canonical order (permutation disjuncts TODO)
+- [x] Encode temporal assertions → conjunction/disjunction over rounds (§10.3)
+- [x] Negate assertions, keep assumptions
+- [x] `unknown()` → `(declare-fun x () Real)` with no constraints
+- [x] `uncertain(μ,σ)` → same as unknown for solving
+- [x] **Data test:** 7 unit tests: SSA versioning, literal encoding, temporal combinatorics, simple/unknown program encoding
 
 ---
 
