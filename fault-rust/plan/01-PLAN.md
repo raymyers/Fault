@@ -190,7 +190,7 @@ Strategy: use `pest`, `lalrpop`, or a hand-written recursive-descent parser targ
 - [ ] Multi-file imports — `imports/` directory
 - [ ] Bad spec error reporting — `badspecs/` directory
 - [x] Indexes — `indexes.fspec`
-- [ ] `bathtub2.fspec` (multiple parallel flows)
+- [x] `bathtub2.fspec` (multiple parallel flows)
 - [ ] Full statechart system — `statecharts/`
 - [ ] **Data test:** each of the above has oracle fixture; all pass
 

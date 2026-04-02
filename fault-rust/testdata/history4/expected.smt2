@@ -4,68 +4,94 @@
 (declare-fun history4_s_B_0 () Bool)
 (declare-fun history4_s_value_1 () Real)
 (declare-fun history4_s_value_2 () Real)
-(declare-fun block3true_1 () Bool)
-(declare-fun block3false_1 () Bool)
+(declare-fun block1true_1 () Bool)
+(declare-fun block2false_1 () Bool)
 (declare-fun history4_s_value_3 () Real)
+(declare-fun block3true_1 () Bool)
+(declare-fun block4false_1 () Bool)
 (declare-fun history4_s_value_4 () Real)
-(declare-fun block3true_2 () Bool)
-(declare-fun block3false_2 () Bool)
 (declare-fun history4_s_value_5 () Real)
+(declare-fun block5true_2 () Bool)
+(declare-fun block6false_2 () Bool)
 (declare-fun history4_s_value_6 () Real)
-(declare-fun block3true_3 () Bool)
-(declare-fun block3false_3 () Bool)
+(declare-fun block7true_2 () Bool)
+(declare-fun block8false_2 () Bool)
 (declare-fun history4_s_value_7 () Real)
 (declare-fun history4_s_value_8 () Real)
-(declare-fun block3true_4 () Bool)
-(declare-fun block3false_4 () Bool)
+(declare-fun block9true_3 () Bool)
+(declare-fun block10false_3 () Bool)
 (declare-fun history4_s_value_9 () Real)
+(declare-fun block11true_3 () Bool)
+(declare-fun block12false_3 () Bool)
 (declare-fun history4_s_value_10 () Real)
-(declare-fun block3true_5 () Bool)
-(declare-fun block3false_5 () Bool)
+(declare-fun history4_s_value_11 () Real)
+(declare-fun block13true_4 () Bool)
+(declare-fun block14false_4 () Bool)
+(declare-fun history4_s_value_12 () Real)
+(declare-fun block15true_4 () Bool)
+(declare-fun block16false_4 () Bool)
+(declare-fun history4_s_value_13 () Real)
+(declare-fun history4_s_value_14 () Real)
+(declare-fun block17true_5 () Bool)
+(declare-fun block18false_5 () Bool)
+(declare-fun history4_s_value_15 () Real)
+(declare-fun block19true_5 () Bool)
+(declare-fun block20false_5 () Bool)
 (assert (= history4_s_value_0 1.0))
 (assert (= history4_s_A_0 true))
 (assert (= history4_s_B_0 true))
-
 (assert (= history4_s_value_1 (+ history4_s_value_0 history4_s_value_0)))
-
-(assert (ite (and (= history4_s_A_0 true) (= history4_s_B_0 true)) (and (= block3true_1 true) (= block3false_1 false) (= history4_s_value_2 history4_s_value_1)) (and (= block3true_1 false) (= block3false_1 true) (= history4_s_value_2 history4_s_value_0))))
+(assert (ite history4_s_B_0 (and (= block1true_1 true) (= block2false_1 false) (= history4_s_value_2 history4_s_value_1)) (and (= block1true_1 false) (= block2false_1 true) (= history4_s_value_2 history4_s_value_0))))
+(assert (or (and block1true_1
+(not block2false_1))
+(and (not block1true_1)
+block2false_1)))
+(assert (ite history4_s_A_0 (and (= block3true_1 true) (= block4false_1 false) (= history4_s_value_3 history4_s_value_2)) (and (= block3true_1 false) (= block4false_1 true) (= history4_s_value_3 history4_s_value_0))))
 (assert (or (and block3true_1
-(not block3false_1))
+(not block4false_1))
 (and (not block3true_1)
-block3false_1)))
-
-
-(assert (= history4_s_value_3 (+ history4_s_value_2 history4_s_value_0)))
-
-(assert (ite (and (= history4_s_A_0 true) (= history4_s_B_0 true)) (and (= block3true_2 true) (= block3false_2 false) (= history4_s_value_4 history4_s_value_3)) (and (= block3true_2 false) (= block3false_2 true) (= history4_s_value_4 history4_s_value_2))))
-(assert (or (and block3true_2
-(not block3false_2))
-(and (not block3true_2)
-block3false_2)))
-
-
-(assert (= history4_s_value_5 (+ history4_s_value_4 history4_s_value_2)))
-
-(assert (ite (and (= history4_s_A_0 true) (= history4_s_B_0 true)) (and (= block3true_3 true) (= block3false_3 false) (= history4_s_value_6 history4_s_value_5)) (and (= block3true_3 false) (= block3false_3 true) (= history4_s_value_6 history4_s_value_4))))
-(assert (or (and block3true_3
-(not block3false_3))
-(and (not block3true_3)
-block3false_3)))
-
-
-(assert (= history4_s_value_7 (+ history4_s_value_6 history4_s_value_4)))
-
-(assert (ite (and (= history4_s_A_0 true) (= history4_s_B_0 true)) (and (= block3true_4 true) (= block3false_4 false) (= history4_s_value_8 history4_s_value_7)) (and (= block3true_4 false) (= block3false_4 true) (= history4_s_value_8 history4_s_value_6))))
-(assert (or (and block3true_4
-(not block3false_4))
-(and (not block3true_4)
-block3false_4)))
-
-
-(assert (= history4_s_value_9 (+ history4_s_value_8 history4_s_value_6)))
-
-(assert (ite (and (= history4_s_A_0 true) (= history4_s_B_0 true)) (and (= block3true_5 true) (= block3false_5 false) (= history4_s_value_10 history4_s_value_9)) (and (= block3true_5 false) (= block3false_5 true) (= history4_s_value_10 history4_s_value_8))))
-(assert (or (and block3true_5
-(not block3false_5))
-(and (not block3true_5)
-block3false_5)))
+block4false_1)))
+(assert (= history4_s_value_4 (+ history4_s_value_3 history4_s_value_0)))
+(assert (ite history4_s_B_0 (and (= block5true_2 true) (= block6false_2 false) (= history4_s_value_5 history4_s_value_4)) (and (= block5true_2 false) (= block6false_2 true) (= history4_s_value_5 history4_s_value_3))))
+(assert (or (and block5true_2
+(not block6false_2))
+(and (not block5true_2)
+block6false_2)))
+(assert (ite history4_s_A_0 (and (= block7true_2 true) (= block8false_2 false) (= history4_s_value_6 history4_s_value_5)) (and (= block7true_2 false) (= block8false_2 true) (= history4_s_value_6 history4_s_value_3))))
+(assert (or (and block7true_2
+(not block8false_2))
+(and (not block7true_2)
+block8false_2)))
+(assert (= history4_s_value_7 (+ history4_s_value_6 history4_s_value_3)))
+(assert (ite history4_s_B_0 (and (= block9true_3 true) (= block10false_3 false) (= history4_s_value_8 history4_s_value_7)) (and (= block9true_3 false) (= block10false_3 true) (= history4_s_value_8 history4_s_value_6))))
+(assert (or (and block9true_3
+(not block10false_3))
+(and (not block9true_3)
+block10false_3)))
+(assert (ite history4_s_A_0 (and (= block11true_3 true) (= block12false_3 false) (= history4_s_value_9 history4_s_value_8)) (and (= block11true_3 false) (= block12false_3 true) (= history4_s_value_9 history4_s_value_6))))
+(assert (or (and block11true_3
+(not block12false_3))
+(and (not block11true_3)
+block12false_3)))
+(assert (= history4_s_value_10 (+ history4_s_value_9 history4_s_value_6)))
+(assert (ite history4_s_B_0 (and (= block13true_4 true) (= block14false_4 false) (= history4_s_value_11 history4_s_value_10)) (and (= block13true_4 false) (= block14false_4 true) (= history4_s_value_11 history4_s_value_9))))
+(assert (or (and block13true_4
+(not block14false_4))
+(and (not block13true_4)
+block14false_4)))
+(assert (ite history4_s_A_0 (and (= block15true_4 true) (= block16false_4 false) (= history4_s_value_12 history4_s_value_11)) (and (= block15true_4 false) (= block16false_4 true) (= history4_s_value_12 history4_s_value_9))))
+(assert (or (and block15true_4
+(not block16false_4))
+(and (not block15true_4)
+block16false_4)))
+(assert (= history4_s_value_13 (+ history4_s_value_12 history4_s_value_9)))
+(assert (ite history4_s_B_0 (and (= block17true_5 true) (= block18false_5 false) (= history4_s_value_14 history4_s_value_13)) (and (= block17true_5 false) (= block18false_5 true) (= history4_s_value_14 history4_s_value_12))))
+(assert (or (and block17true_5
+(not block18false_5))
+(and (not block17true_5)
+block18false_5)))
+(assert (ite history4_s_A_0 (and (= block19true_5 true) (= block20false_5 false) (= history4_s_value_15 history4_s_value_14)) (and (= block19true_5 false) (= block20false_5 true) (= history4_s_value_15 history4_s_value_12))))
+(assert (or (and block19true_5
+(not block20false_5))
+(and (not block19true_5)
+block20false_5)))

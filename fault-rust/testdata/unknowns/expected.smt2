@@ -10,7 +10,5 @@
 (assert (= unknowns_loop_data_c_1 (+ unknowns_loop_data_c_0 (+ unknowns_loop_data_a_0 unknowns_loop_data_b_0))))
 (assert (= unknowns_loop_data_c_2 (+ unknowns_loop_data_c_1 (+ unknowns_loop_data_a_0 unknowns_loop_data_b_0))))
 (assert (= unknowns_loop_data_c_3 (+ unknowns_loop_data_c_2 (+ unknowns_loop_data_a_0 unknowns_loop_data_b_0))))
-(assert (> unknowns_loop_data_a_0 6))
-(assert (> unknowns_loop_data_a_0 5))
-
-
+(assert (or (not (<= unknowns_loop_data_a_0 6.0)) (not (<= unknowns_loop_data_a_1 6.0)) (not (<= unknowns_loop_data_a_2 6.0)) (not (<= unknowns_loop_data_a_3 6.0))))
+(assert (and (> unknowns_loop_data_a_0 5.0) (> unknowns_loop_data_a_1 5.0) (> unknowns_loop_data_a_2 5.0) (> unknowns_loop_data_a_3 5.0)))
