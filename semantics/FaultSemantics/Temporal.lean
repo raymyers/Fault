@@ -128,9 +128,29 @@ theorem not_eventually_iff_always_not (P : FaultState → Prop) (states : List F
 /-- `noFewerThan 1` is equivalent to `eventually` -/
 theorem nft_one_iff_eventually (P : FaultState → Prop) (states : List FaultState) :
     noFewerThan states P 1 ↔ eventually states P := by
-  sorry  -- To be proved
+  unfold noFewerThan eventually
+  constructor
+  · rintro ⟨l, hSub, hAll, hLen⟩
+    match l, hLen with
+    | σ :: _, _ =>
+      exact ⟨σ, hSub (List.mem_cons_self ..), hAll σ (List.mem_cons_self ..)⟩
+  · rintro ⟨σ, hMem, hP⟩
+    exact ⟨[σ], fun x hx => by simp at hx; rw [hx]; exact hMem,
+           fun x hx => by simp at hx; rw [hx]; exact hP,
+           by simp⟩
 
 /-- `noMoreThan 0` is equivalent to `always (¬P)` -/
 theorem nmt_zero_iff_always_not (P : FaultState → Prop) (states : List FaultState) :
     noMoreThan states P 0 ↔ always states (fun σ => ¬ P σ) := by
-  sorry  -- To be proved
+  unfold noMoreThan always
+  constructor
+  · intro h σ hMem hP
+    have := h [σ] (fun x hx => by simp at hx; rw [hx]; exact hMem)
+              (fun x hx => by simp at hx; rw [hx]; exact hP)
+    simp at this
+  · intro h l hSub hAll
+    by_contra hgt
+    push_neg at hgt
+    match l, hgt with
+    | σ :: _, _ =>
+      exact h σ (hSub (List.mem_cons_self ..)) (hAll σ (List.mem_cons_self ..))
