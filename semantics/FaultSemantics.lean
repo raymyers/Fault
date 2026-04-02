@@ -3,3 +3,4 @@ import FaultSemantics.State
 import FaultSemantics.LTS
 import FaultSemantics.Execution
 import FaultSemantics.Temporal
+import FaultSemantics.Properties
