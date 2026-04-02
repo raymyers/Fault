@@ -105,11 +105,53 @@ inductive EvalR : FaultState → Expr → SVal → Prop where
       e ∈ es → EvalR σ e v →
       EvalR σ (.choose es) v
 
+private theorem evalBinOp_ne_nil_left (op : BinOp) (l r : SVal)
+    (h : evalBinOp op l r ≠ .nil) : l ≠ .nil := by
+  intro hl; subst hl; simp [evalBinOp] at h
+
+private theorem evalBinOp_ne_nil_right (op : BinOp) (l r : SVal)
+    (h : evalBinOp op l r ≠ .nil) : r ≠ .nil := by
+  intro hr; subst hr
+  cases l with
+  | real a => cases op <;> simp [evalBinOp] at h
+  | bool a => cases op <;> simp [evalBinOp] at h
+  | nil => simp [evalBinOp] at h
+
+private theorem evalUnOp_ne_nil (op : UnOp) (v : SVal)
+    (h : evalUnOp op v ≠ .nil) : v ≠ .nil := by
+  intro hv; subst hv; simp [evalUnOp] at h
+
 /-- For concrete (non-unknown/uncertain) expressions, EvalR agrees with eval -/
 theorem evalR_of_eval (σ : FaultState) (e : Expr) (v : SVal) :
     eval σ e = v → v ≠ .nil →
     EvalR σ e v := by
-  sorry  -- provable by structural induction on e
+  intro heval hne
+  cases e with
+  | lit val =>
+    cases val with
+    | nat n => simp [eval] at heval; subst heval; exact EvalR.litNat σ n
+    | float f => simp [eval] at heval; subst heval; exact EvalR.litFloat σ f
+    | bool b => simp [eval] at heval; subst heval; exact EvalR.litBool σ b
+    | str s => simp [eval] at heval; subst heval; exact EvalR.litStr σ s
+    | unknown => simp [eval] at heval; subst heval; exact absurd rfl hne
+    | uncertain μ σ_ => simp [eval] at heval; subst heval; exact absurd rfl hne
+    | nil => simp [eval] at heval; subst heval; exact absurd rfl hne
+  | var x => simp [eval] at heval; subst heval; exact EvalR.var σ x
+  | binop op l r =>
+    simp [eval] at heval; subst heval
+    have hnel : eval σ l ≠ .nil := evalBinOp_ne_nil_left op _ _ hne
+    have hner : eval σ r ≠ .nil := evalBinOp_ne_nil_right op _ _ hne
+    exact EvalR.binop σ op l r (eval σ l) (eval σ r)
+      (evalR_of_eval σ l (eval σ l) rfl hnel) (evalR_of_eval σ r (eval σ r) rfl hner)
+  | unop op e' =>
+    simp [eval] at heval; subst heval
+    have hne' : eval σ e' ≠ .nil := evalUnOp_ne_nil op _ hne
+    exact EvalR.unop σ op e' (eval σ e') (evalR_of_eval σ e' (eval σ e') rfl hne')
+  | dot e' field =>
+    simp [eval] at heval; subst heval
+    exact EvalR.dot σ e' field (eval σ e') (evalR_of_eval σ e' (eval σ e') rfl hne)
+  | history x k => simp [eval] at heval; subst heval; exact EvalR.history σ x k
+  | choose es => simp [eval] at heval; subst heval; exact absurd rfl hne
 
 /-! ## Arithmetic Helpers -/
 
