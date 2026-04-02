@@ -179,12 +179,16 @@ Strategy: use `pest`, `lalrpop`, or a hand-written recursive-descent parser targ
 
 ## Milestone 10 — Edge Cases & Completeness
 
+- [x] Flow-level scalar properties (`value: 0` on flows → `__val_*` synthetic stocks)
+- [x] `this` keyword in flow functions → resolves to instance prefix
+- [x] Boolean-sorted variables (`Bool` instead of `Real` when stock value is bool)
+- [x] Else-branch encoding (both branches generate SMT; ITE selects phi)
+- [x] History references across rounds — `history1-4.fspec` (round_entries snapshots)
+- [x] **Data test:** 3 new e2e tests (booleans, increment, history1) — 114 total tests pass
 - [ ] String-as-boolean (`Str → Bool(false)`) — `strings.fspec`
-- [ ] History references across rounds — `history1-4.fspec`
 - [ ] Stock swaps — `swaps/` directory
 - [ ] Multi-file imports — `imports/` directory
 - [ ] Bad spec error reporting — `badspecs/` directory
-- [ ] Boolean stocks — `booleans.fspec`
 - [ ] Indexes — `indexes.fspec`
 - [ ] `bathtub2.fspec` (multiple parallel flows)
 - [ ] Full statechart system — `statecharts/`

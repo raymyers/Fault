@@ -36,6 +36,14 @@ struct SmtWriter {
     /// Map from unqualified/resolved names → qualified names.
     /// E.g., "s_a" → "unknowns_loop_data_a" for invariant resolution.
     name_map: HashMap<String, String>,
+    /// Qualified var name → sort ("Real" or "Bool").
+    var_sorts: HashMap<String, &'static str>,
+    /// Per-round entry SSA versions: round → { qualified_var → versioned_name }.
+    round_entries: Vec<HashMap<String, String>>,
+    /// All qualified variable names (for tracking round entries).
+    all_vars: Vec<String>,
+    /// Optional override SSA for expression reads (used in else-branch encoding).
+    read_ssa: Option<Ssa>,
 }
 
 impl SmtWriter {
@@ -52,6 +60,10 @@ impl SmtWriter {
             unknown_vars: Vec::new(),
             block_counter: 0,
             name_map: HashMap::new(),
+            var_sorts: HashMap::new(),
+            round_entries: Vec::new(),
+            all_vars: Vec::new(),
+            read_ssa: None,
         }
     }
 
@@ -105,6 +117,21 @@ impl SmtWriter {
         for (inst_name, flow_type) in &instances {
             if let Some(stock_refs) = flow_stocks.get(flow_type) {
                 for (stock_ref, stock_type) in stock_refs {
+                    // Flow-level scalar property: stock_type is "__val_*"
+                    if stock_type.starts_with("__val_") {
+                        let val = parse_synthetic_val(stock_type);
+                        let qname = format!("{}_{}_{}", self.spec_name, inst_name, stock_ref);
+
+                        // Map for invariant resolution
+                        let stock_key = stock_ref.clone();
+                        self.name_map.insert(stock_key, qname.clone());
+
+                        let sort = val_sort(&val);
+                        self.var_sorts.insert(qname.clone(), sort);
+                        vars.push((qname, val));
+                        continue;
+                    }
+
                     if let Some(props) = stock_props.get(stock_type) {
                         for (prop_name, val) in props {
                             let qname = format!(
@@ -120,6 +147,8 @@ impl SmtWriter {
                             let flow_key = format!("{}_{}_{}", flow_type, stock_ref, prop_name);
                             self.name_map.insert(flow_key, qname.clone());
 
+                            let sort = val_sort(val);
+                            self.var_sorts.insert(qname.clone(), sort);
                             vars.push((qname, val.clone()));
                         }
                     }
@@ -132,17 +161,18 @@ impl SmtWriter {
     /// Emit initial value declarations and constraints.
     fn encode_initial_values(&mut self) {
         let vars = self.build_qualified_vars();
+        self.all_vars = vars.iter().map(|(n, _)| n.clone()).collect();
+
         for (qname, val) in &vars {
             let v0 = self.ssa.current_name(qname);
-            self.declare(&v0, "Real");
+            let sort = self.var_sorts.get(qname).copied().unwrap_or("Real");
+            self.declare(&v0, sort);
 
             match val {
                 Val::Unknown | Val::Uncertain { .. } => {
                     self.unknown_vars.push(qname.clone());
-                    // No initial constraint — free variable
                 }
                 Val::Nil => {
-                    // Bare declaration (e.g. `a,` with no value)
                     self.unknown_vars.push(qname.clone());
                 }
                 _ => {
@@ -150,13 +180,27 @@ impl SmtWriter {
                 }
             }
         }
+
+        // Snapshot round 0 entry versions
+        self.snapshot_round_entry();
     }
 
-    /// Encode one round of the run block.
+    /// Snapshot current SSA versions as round entry points for history references.
+    fn snapshot_round_entry(&mut self) {
+        let mut entry = HashMap::new();
+        let vars = self.all_vars.clone();
+        for var in &vars {
+            entry.insert(var.clone(), self.ssa.current_name(var));
+        }
+        self.round_entries.push(entry);
+    }
+
+    /// Encode one round of the run block, then snapshot for history.
     fn encode_round(&mut self, prog: &ResolvedProgram) {
         for stmt in &prog.run_block {
             self.encode_stmt(stmt, prog);
         }
+        self.snapshot_round_entry();
     }
 
     /// Encode a statement.
@@ -248,12 +292,14 @@ impl SmtWriter {
     }
 
     /// Qualify a local name (may contain dots) relative to an instance.
+    /// Strips `this` prefix: `this.value` → `instance_value`.
     fn qualify_local(&self, name: &str, instance: &str) -> String {
-        // If name contains '.', split and rebuild
         if name.contains('.') {
             let parts: Vec<&str> = name.split('.').collect();
-            let mut result = format!("{}_{}", instance, parts[0]);
-            for part in &parts[1..] {
+            // Skip "this" prefix
+            let start = if parts[0] == "this" { 1 } else { 0 };
+            let mut result = instance.to_string();
+            for part in &parts[start..] {
                 result = format!("{}_{}", result, part);
             }
             result
@@ -265,9 +311,16 @@ impl SmtWriter {
     /// Resolve expressions in flow function body to qualified names.
     fn resolve_flow_expr(&self, expr: &Expr, instance: &str) -> Expr {
         match expr {
+            Expr::Var(name) if name == "this" => {
+                Expr::Var(format!("{}_{}", self.spec_name, instance))
+            }
+            Expr::Var(name) if name.starts_with("this_") => {
+                // Resolved `this.x` → `this_x`. Strip prefix, qualify as instance property.
+                let prop = &name["this_".len()..];
+                Expr::Var(format!("{}_{}_{}", self.spec_name, instance, prop))
+            }
             Expr::Var(name) => Expr::Var(self.qualify_var(name, instance)),
             Expr::Dot { expr, field } => {
-                // Flatten dot: resolve base, append field
                 let base = self.resolve_flow_expr(expr, instance);
                 if let Expr::Var(base_name) = base {
                     Expr::Var(format!("{}_{}", base_name, field))
@@ -284,16 +337,50 @@ impl SmtWriter {
                 op: *op,
                 expr: Box::new(self.resolve_flow_expr(expr, instance)),
             },
-            Expr::Lit(_) | Expr::History { .. } | Expr::Choose(_) => expr.clone(),
+            Expr::History { name, offset } => Expr::History {
+                name: self.qualify_var(name, instance),
+                offset: *offset,
+            },
+            Expr::Choose(exprs) => Expr::Choose(
+                exprs
+                    .iter()
+                    .map(|e| self.resolve_flow_expr(e, instance))
+                    .collect(),
+            ),
+            Expr::Lit(_) => expr.clone(),
+        }
+    }
+
+    /// Get the SMT sort for a variable, defaulting to "Real".
+    fn sort_for(&self, qname: &str) -> &'static str {
+        if let Some(s) = self.var_sorts.get(qname) {
+            return s;
+        }
+        if let Some(i) = qname.rfind('_')
+            && qname[i + 1..].chars().all(|c| c.is_ascii_digit())
+            && let Some(s) = self.var_sorts.get(&qname[..i])
+        {
+            return s;
+        }
+        "Real"
+    }
+
+    /// Get the current versioned name for reading (respects read_ssa override).
+    fn read_current(&mut self, name: &str) -> String {
+        if let Some(ref mut rssa) = self.read_ssa {
+            rssa.current_name(name)
+        } else {
+            self.ssa.current_name(name)
         }
     }
 
     /// Encode a flow assignment: `name op= expr`.
     fn encode_flow_assign(&mut self, name: &str, op: FlowOp, expr: &Expr) {
-        let current = self.ssa.current_name(name);
+        let current = self.read_current(name);
         let rhs = self.encode_expr(expr);
         let new_name = self.ssa.next_name(name);
-        self.declare(&new_name, "Real");
+        let sort = self.sort_for(name);
+        self.declare(&new_name, sort);
 
         let smt_rhs = match op {
             FlowOp::Assign => rhs,
@@ -308,7 +395,7 @@ impl SmtWriter {
     fn encode_expr(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::Lit(val) => val_to_smt(val),
-            Expr::Var(name) => self.ssa.current_name(name),
+            Expr::Var(name) => self.read_current(name),
             Expr::BinOp { op, left, right } => {
                 let l = self.encode_expr(left);
                 let r = self.encode_expr(right);
@@ -319,14 +406,20 @@ impl SmtWriter {
                 format!("({} {})", unop_to_smt(*op), e)
             }
             Expr::History { name, offset } => {
-                // History references are resolved during temporal encoding
-                // For now, use current version with offset
-                let target_ver = self.ssa.current(name) as i64 + offset;
-                if target_ver >= 0 {
-                    format!("{}_{}", name, target_ver)
-                } else {
-                    val_to_smt(&Val::Nat(0))
+                // Use round_entries to find the version at the referenced round.
+                // Current round index = round_entries.len() - 1 (last snapshot).
+                // [now-k] at round R → entry at round R-k (which is index R+1-k
+                // because entry[0] = initial, entry[1] = after round 0, etc.)
+                let current_round = self.round_entries.len().saturating_sub(1);
+                let target_round = current_round as i64 + offset;
+                if target_round >= 0
+                    && (target_round as usize) < self.round_entries.len()
+                    && let Some(ver) = self.round_entries[target_round as usize].get(name)
+                {
+                    return ver.clone();
                 }
+                // Fallback: use initial version
+                format!("{}_0", name)
             }
             Expr::Dot { expr, field } => {
                 let base = self.encode_expr(expr);
@@ -346,51 +439,87 @@ impl SmtWriter {
 
     /// Encode an if-then-else with branch tracking.
     ///
-    /// SSA scheme: run then-branch in `self.ssa` to generate assignment versions,
-    /// then create phi versions. The "else" values are the pre-branch versions.
+    /// Both branches are encoded sequentially. The then branch runs first,
+    /// then the else branch uses `read_ssa` to read pre-branch values while
+    /// writing to sequential SSA versions.
     fn encode_if(
         &mut self,
         cond: &Expr,
         then_branch: &[Stmt],
-        _else_branch: &[Stmt],
+        else_branch: &[Stmt],
         prog: &ResolvedProgram,
     ) {
-        self.block_counter += 1;
-        let block_id = self.block_counter;
-
         let cond_smt = self.encode_expr(cond);
 
-        // Snapshot before: else-branch keeps these versions
-        let mut ssa_before = self.ssa.clone();
+        let ssa_before = self.ssa.clone();
 
-        // Collect variables modified in then branch
         let then_modified = collect_modified_vars(then_branch);
+        let else_modified = collect_modified_vars(else_branch);
 
-        // Run then branch → FlowAssigns create intermediate versions
+        let mut all_modified = then_modified.clone();
+        for v in &else_modified {
+            if !all_modified.contains(v) {
+                all_modified.push(v.clone());
+            }
+        }
+
+        // Encode then branch (reads from current SSA, writes next versions)
         for stmt in then_branch {
             self.encode_stmt(stmt, prog);
         }
+        let mut ssa_after_then = self.ssa.clone();
 
-        // Capture then-branch versions, then create phi versions
+        // Encode else branch: reads from pre-branch SSA, writes sequential
+        if !else_branch.is_empty() {
+            self.read_ssa = Some(ssa_before.clone());
+            for stmt in else_branch {
+                self.encode_stmt(stmt, prog);
+            }
+            self.read_ssa = None;
+        }
+        let mut ssa_after_else = self.ssa.clone();
+
+        // Capture branch versions and create phi.
+        // Then version = what encode produced in then branch.
+        // Else version: if the var was modified in else, use ssa_after_else;
+        // otherwise use ssa_before (unchanged).
         let mut then_vers = Vec::new();
         let mut else_vers = Vec::new();
         let mut phi_vers = Vec::new();
 
-        for var in &then_modified {
-            then_vers.push(self.ssa.current_name(var));
-            else_vers.push(ssa_before.current_name(var));
+        for var in &all_modified {
+            let then_v = if then_modified.contains(var) {
+                ssa_after_then.current_name(var)
+            } else {
+                ssa_before.clone().current_name(var)
+            };
+            let else_v = if else_modified.contains(var) {
+                ssa_after_else.current_name(var)
+            } else {
+                ssa_before.clone().current_name(var)
+            };
+            then_vers.push(then_v);
+            else_vers.push(else_v);
+
             let phi = self.ssa.next_name(var);
-            self.declare(&phi, "Real");
+            let sort = self.sort_for(var);
+            self.declare(&phi, sort);
             phi_vers.push(phi);
         }
 
-        // Block tracking booleans
-        let true_name = format!("block{}true_{}", block_id, 1);
-        let false_name = format!("block{}false_{}", block_id, 1);
+        // Block tracking booleans — separate IDs for then/else
+        self.block_counter += 1;
+        let then_block_id = self.block_counter;
+        self.block_counter += 1;
+        let else_block_id = self.block_counter;
+
+        let round_num = self.round_entries.len();
+        let true_name = format!("block{}true_{}", then_block_id, round_num);
+        let false_name = format!("block{}false_{}", else_block_id, round_num);
         self.declare(&true_name, "Bool");
         self.declare(&false_name, "Bool");
 
-        if !then_modified.is_empty() {
+        if !all_modified.is_empty() {
             let mut then_parts = vec![
                 format!("(= {} true)", true_name),
                 format!("(= {} false)", false_name),
@@ -412,7 +541,6 @@ impl SmtWriter {
 
             self.assert_smt(&format!("(ite {} {} {})", cond_smt, then_conj, else_conj));
 
-            // Exclusivity constraint
             self.assert_smt(&format!(
                 "(or (and {}\n(not {}))\n(and (not {})\n{}))",
                 true_name, false_name, true_name, false_name
@@ -619,6 +747,30 @@ pub fn encode_program(prog: &ResolvedProgram, spec_name: &str) -> String {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
+
+/// Determine the SMT sort for a value.
+fn val_sort(val: &Val) -> &'static str {
+    match val {
+        Val::Bool(_) => "Bool",
+        _ => "Real",
+    }
+}
+
+/// Parse a synthetic stock type name (e.g., `__val_0`) back to a Val.
+fn parse_synthetic_val(stock_type: &str) -> Val {
+    let suffix = stock_type.strip_prefix("__val_").unwrap_or("0");
+    if suffix == "true" {
+        Val::Bool(true)
+    } else if suffix == "false" {
+        Val::Bool(false)
+    } else if let Ok(n) = suffix.parse::<u64>() {
+        Val::Nat(n)
+    } else if let Ok(f) = suffix.parse::<f64>() {
+        Val::Float(f)
+    } else {
+        Val::Nat(0)
+    }
+}
 
 /// Convert a Val to SMT-LIB2 literal string.
 fn val_to_smt(val: &Val) -> String {
@@ -1037,5 +1189,144 @@ for 1 init{l = new fl;} run {
         assert!(smt.contains("(ite (> simpleA_l_vault_value_0 4.0)"));
         assert!(smt.contains("simpleA_l_vault_value_2 simpleA_l_vault_value_1"));
         assert!(smt.contains("simpleA_l_vault_value_2 simpleA_l_vault_value_0"));
+    }
+
+    #[test]
+    fn e2e_booleans() {
+        let src = r#"spec booleans;
+
+def st = stock{
+    value: true,
+};
+
+def fl = flow{
+    vault: new st,
+    fn: func{
+        if vault.value {
+            vault.value = false;
+        }else{
+            vault.value = true;
+        }
+    },
+};
+
+for 1 init{l = new fl;} run {
+    l.fn;
+}"#;
+
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        let lines = normalize_smt(&smt);
+
+        // Bool-sorted declarations
+        assert!(lines.contains(&"(declare-fun booleans_l_vault_value_0 () Bool)".into()));
+        assert!(lines.contains(&"(declare-fun booleans_l_vault_value_1 () Bool)".into()));
+        assert!(lines.contains(&"(declare-fun booleans_l_vault_value_2 () Bool)".into()));
+        assert!(lines.contains(&"(declare-fun booleans_l_vault_value_3 () Bool)".into()));
+
+        // Initial value
+        assert!(lines.contains(&"(assert (= booleans_l_vault_value_0 true))".into()));
+
+        // Then: false, Else: true
+        assert!(lines.contains(&"(assert (= booleans_l_vault_value_1 false))".into()));
+        assert!(lines.contains(&"(assert (= booleans_l_vault_value_2 true))".into()));
+
+        // ITE using the boolean value directly as condition
+        assert!(smt.contains("(ite booleans_l_vault_value_0"));
+    }
+
+    #[test]
+    fn e2e_increment() {
+        let src = r#"spec increment;
+
+def fib = flow{
+    value: 0,
+    step: func{
+        if this.value == 0 {
+              this.value = 1;
+        }else{
+              this.value <- this.value[now-1];
+        }
+    }
+};
+
+for 5 init{f = new fib;} run{
+    f.step;
+}"#;
+
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        let lines = normalize_smt(&smt);
+
+        // Flow-level scalar property
+        assert!(lines.contains(&"(declare-fun increment_f_value_0 () Real)".into()));
+        assert!(lines.contains(&"(assert (= increment_f_value_0 0.0))".into()));
+
+        // 5 rounds × 3 versions + initial = 16 value versions (0..15)
+        assert!(lines.contains(&"(declare-fun increment_f_value_15 () Real)".into()));
+
+        // Then branch: this.value = 1
+        assert!(lines.contains(&"(assert (= increment_f_value_1 1.0))".into()));
+
+        // Else branch: this.value <- this.value[now-1]
+        // Round 1: value_2 = value_0 + value_0 (history[now-1] = initial)
+        assert!(lines.contains(
+            &"(assert (= increment_f_value_2 (+ increment_f_value_0 increment_f_value_0)))".into()
+        ));
+
+        // Round 2: value_5 = value_3 + value_0 (history[now-1] = round 0 entry)
+        assert!(lines.contains(
+            &"(assert (= increment_f_value_5 (+ increment_f_value_3 increment_f_value_0)))".into()
+        ));
+
+        // ITE condition uses qualified name (not this_value)
+        assert!(smt.contains("(ite (= increment_f_value_0 0.0)"));
+    }
+
+    #[test]
+    fn e2e_history1() {
+        let src = r#"spec history1;
+
+def counter = flow{
+    value: 1,
+    step: func{
+        if this.value > 0 {
+            this.value <- this.value[now-1];
+        } else {
+            this.value = 1;
+        }
+    }
+};
+
+for 4 init{c = new counter;} run{
+    c.step;
+}"#;
+
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        let lines = normalize_smt(&smt);
+
+        assert!(lines.contains(&"(assert (= history1_c_value_0 1.0))".into()));
+
+        // Round 1 then: value_1 = value_0 + value_0 (inflow, history[now-1]=value_0)
+        assert!(lines.contains(
+            &"(assert (= history1_c_value_1 (+ history1_c_value_0 history1_c_value_0)))".into()
+        ));
+
+        // Round 2 then: value_4 = value_3 + value_0
+        assert!(lines.contains(
+            &"(assert (= history1_c_value_4 (+ history1_c_value_3 history1_c_value_0)))".into()
+        ));
+
+        // Round 3 then: value_7 = value_6 + value_3
+        assert!(lines.contains(
+            &"(assert (= history1_c_value_7 (+ history1_c_value_6 history1_c_value_3)))".into()
+        ));
     }
 }
