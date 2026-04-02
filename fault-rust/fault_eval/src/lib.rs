@@ -150,7 +150,8 @@ pub fn eval(state: &FaultState, expr: &Expr) -> SVal {
         }
         Expr::Dot { expr, .. } => eval(state, expr), // should be resolved away
         Expr::History { name, offset } => state.read_history(name, *offset),
-        Expr::Choose(_) => SVal::Nil, // nondeterministic: resolved at SMT level
+        Expr::Index { name, .. } => state.get_var(name), // absolute index: evaluated at SMT level
+        Expr::Choose(_) => SVal::Nil,                    // nondeterministic: resolved at SMT level
     }
 }
 

@@ -102,6 +102,11 @@ pub enum Expr {
         name: Name,
         offset: i64,
     },
+    /// Absolute index access: `x[0]` means x at round 0.
+    Index {
+        name: Name,
+        index: u64,
+    },
     /// Nondeterministic choice (`||`).
     Choose(Vec<Expr>),
 }

@@ -518,6 +518,10 @@ impl SmtWriter {
                 name: self.qualify_var(name, instance),
                 offset: *offset,
             },
+            Expr::Index { name, index } => Expr::Index {
+                name: self.qualify_var(name, instance),
+                index: *index,
+            },
             Expr::Choose(exprs) => Expr::Choose(
                 exprs
                     .iter()
@@ -597,6 +601,17 @@ impl SmtWriter {
                 }
                 // Fallback: use initial version
                 format!("{}_0", name)
+            }
+            Expr::Index { name, index } => {
+                // Absolute index: x[0] always refers to version at round `index`.
+                // round_entries[0] = initial, round_entries[1] = after round 0, etc.
+                let idx = *index as usize;
+                if idx < self.round_entries.len()
+                    && let Some(ver) = self.round_entries[idx].get(name)
+                {
+                    return ver.clone();
+                }
+                format!("{}_{}", name, index)
             }
             Expr::Dot { expr, field } => {
                 let base = self.encode_expr(expr);
@@ -1632,6 +1647,32 @@ for 4 init{c = new counter;} run{
         // Round 3 then: value_7 = value_6 + value_3
         assert!(lines.contains(
             &"(assert (= history1_c_value_7 (+ history1_c_value_6 history1_c_value_3)))".into()
+        ));
+    }
+
+    #[test]
+    fn e2e_indexes() {
+        // bash.a[0] should always resolve to the initial value (version 0)
+        let src = r#"spec indexes;
+def foo = stock{ a: 10 };
+def bar = flow{
+    bash: new foo,
+    fizz: func{ bash.a <- bash.a[0] - 2; },
+};
+for 2 init{ gee = new bar; } run { gee.fizz; };"#;
+        let spec = fault_syntax::parser::parse_spec(&src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        let lines = normalize_smt(&smt);
+
+        // Round 1: bash.a[0] = initial value (indexes_gee_bash_a_0)
+        assert!(lines.contains(
+            &"(assert (= indexes_gee_bash_a_1 (+ indexes_gee_bash_a_0 (- indexes_gee_bash_a_0 2.0))))".into()
+        ));
+        // Round 2: bash.a[0] still = initial value (indexes_gee_bash_a_0), not _1
+        assert!(lines.contains(
+            &"(assert (= indexes_gee_bash_a_2 (+ indexes_gee_bash_a_1 (- indexes_gee_bash_a_0 2.0))))".into()
         ));
     }
 }

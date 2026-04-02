@@ -720,13 +720,18 @@ impl Parser {
                     };
                 }
                 TokenKind::LBracket => {
-                    // History access: name[expr]
+                    // Index/History access: name[expr]
                     self.advance();
                     let index_expr = self.parse_expression()?;
                     self.expect(TokenKind::RBracket)?;
                     let name = expr_to_name(&expr);
-                    let offset = eval_history_offset(&index_expr);
-                    expr = Expr::History { name, offset };
+                    if is_absolute_index(&index_expr) {
+                        let idx = eval_history_offset(&index_expr) as u64;
+                        expr = Expr::Index { name, index: idx };
+                    } else {
+                        let offset = eval_history_offset(&index_expr);
+                        expr = Expr::History { name, offset };
+                    }
                 }
                 _ => break,
             }
@@ -1416,6 +1421,11 @@ fn expr_to_stmt(expr: Expr) -> Result<Stmt, ParseError> {
         }
         _ => Ok(Stmt::Call(format!("{:?}", expr))),
     }
+}
+
+/// Check if an index expression is absolute (bare integer, no `now`).
+fn is_absolute_index(expr: &Expr) -> bool {
+    matches!(expr, Expr::Lit(Val::Nat(_)))
 }
 
 /// Evaluate a history index expression to an offset.

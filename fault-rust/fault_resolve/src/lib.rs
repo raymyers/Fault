@@ -73,6 +73,10 @@ pub fn resolve_expr(aliases: &AliasMap, scope: &[String], expr: Expr) -> Expr {
             name: resolve_alias(aliases, &name, ALIAS_FUEL),
             offset,
         },
+        Expr::Index { name, index } => Expr::Index {
+            name: resolve_alias(aliases, &name, ALIAS_FUEL),
+            index,
+        },
         Expr::Choose(es) => Expr::Choose(
             es.into_iter()
                 .map(|e| resolve_expr(aliases, scope, e))
@@ -354,7 +358,7 @@ pub fn has_dots(expr: &Expr) -> bool {
         Expr::BinOp { left, right, .. } => has_dots(left) || has_dots(right),
         Expr::UnOp { expr, .. } => has_dots(expr),
         Expr::Choose(es) => es.iter().any(has_dots),
-        Expr::Lit(_) | Expr::Var(_) | Expr::History { .. } => false,
+        Expr::Lit(_) | Expr::Var(_) | Expr::History { .. } | Expr::Index { .. } => false,
     }
 }
 
