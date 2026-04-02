@@ -5,3 +5,4 @@ import FaultSemantics.Execution
 import FaultSemantics.Temporal
 import FaultSemantics.Properties
 import FaultSemantics.Examples
+import FaultSemantics.Oracle
