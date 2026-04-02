@@ -598,6 +598,7 @@ mod tests {
             constants: vec![ConstDef {
                 name: "c1".into(),
                 value: Val::Nat(1),
+                expr: None,
             }],
             stocks: vec![StockDef {
                 name: "s1".into(),

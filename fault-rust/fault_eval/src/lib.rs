@@ -314,6 +314,7 @@ mod tests {
             constants: vec![ConstDef {
                 name: "c".into(),
                 value: Val::Bool(true),
+                expr: None,
             }],
             components: vec![],
             invariants: vec![],

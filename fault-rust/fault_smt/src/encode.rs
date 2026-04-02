@@ -38,6 +38,10 @@ struct SmtWriter {
     name_map: HashMap<String, String>,
     /// Qualified var name → sort ("Real" or "Bool").
     var_sorts: HashMap<String, &'static str>,
+    /// Stock target reassignments from init: "inst.stock_ref" → "target_instance".
+    target_swaps: HashMap<String, String>,
+    /// Property value overrides from init: "inst.prop" → override value.
+    prop_overrides: HashMap<String, Val>,
     /// Per-round entry SSA versions: round → { qualified_var → versioned_name }.
     round_entries: Vec<HashMap<String, String>>,
     /// All qualified variable names (for tracking round entries).
@@ -61,6 +65,8 @@ impl SmtWriter {
             block_counter: 0,
             name_map: HashMap::new(),
             var_sorts: HashMap::new(),
+            target_swaps: HashMap::new(),
+            prop_overrides: HashMap::new(),
             round_entries: Vec::new(),
             all_vars: Vec::new(),
             read_ssa: None,
@@ -93,16 +99,33 @@ impl SmtWriter {
             self.flow_funcs.insert(flow.name.clone(), funcs);
         }
 
-        // Instances from init block
+        // Process init block: instances, target swaps, property overrides
         for stmt in &prog.init_block {
-            if let Stmt::FlowAssign {
-                name,
-                expr: Expr::Var(type_ref),
-                ..
-            } = stmt
-                && let Some(type_name) = type_ref.strip_prefix("new ")
-            {
-                self.instances.insert(name.clone(), type_name.to_string());
+            match stmt {
+                Stmt::FlowAssign {
+                    name,
+                    op: _,
+                    expr: Expr::Var(type_ref),
+                } => {
+                    if let Some(type_name) = type_ref.strip_prefix("new ") {
+                        // Instance creation: `inst = new Type`
+                        self.instances.insert(name.clone(), type_name.to_string());
+                    } else if name.contains('.') {
+                        // Target swap: `flow_inst.stock_ref = other_inst`
+                        self.target_swaps.insert(name.clone(), type_ref.clone());
+                    }
+                }
+                Stmt::FlowAssign {
+                    name,
+                    op: _,
+                    expr: Expr::Lit(val),
+                } => {
+                    if name.contains('.') {
+                        // Property override: `inst.prop = val`
+                        self.prop_overrides.insert(name.clone(), val.clone());
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -113,16 +136,38 @@ impl SmtWriter {
         let instances = self.instances.clone();
         let flow_stocks = self.flow_stocks.clone();
         let stock_props = self.stock_props.clone();
+        let target_swaps = self.target_swaps.clone();
+        let prop_overrides = self.prop_overrides.clone();
+        // Track which stock instances are already emitted (avoid duplicates
+        // when multiple flows reference the same swapped target)
+        let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for (inst_name, flow_type) in &instances {
             if let Some(stock_refs) = flow_stocks.get(flow_type) {
                 for (stock_ref, stock_type) in stock_refs {
-                    // Flow-level scalar property: stock_type is "__val_*"
-                    if stock_type.starts_with("__val_") {
-                        let val = parse_synthetic_val(stock_type);
-                        let qname = format!("{}_{}_{}", self.spec_name, inst_name, stock_ref);
+                    // Check for target swap: flow_inst.stock_ref → other_instance
+                    let swap_key = format!("{}.{}", inst_name, stock_ref);
+                    let (var_prefix, resolved_stock_type) =
+                        if let Some(target_inst) = target_swaps.get(&swap_key) {
+                            // Swapped: use target instance name and its stock type
+                            let tgt_type = instances
+                                .get(target_inst)
+                                .cloned()
+                                .unwrap_or(stock_type.clone());
+                            (target_inst.clone(), tgt_type)
+                        } else {
+                            // Not swapped: use flow_inst_stock_ref as prefix
+                            (format!("{}_{}", inst_name, stock_ref), stock_type.clone())
+                        };
 
-                        // Map for invariant resolution
+                    // Flow-level scalar property: stock_type is "__val_*"
+                    if resolved_stock_type.starts_with("__val_") {
+                        let val = parse_synthetic_val(&resolved_stock_type);
+                        let qname = format!("{}_{}", self.spec_name, var_prefix);
+                        if !emitted.insert(qname.clone()) {
+                            continue;
+                        }
+
                         let stock_key = stock_ref.clone();
                         self.name_map.insert(stock_key, qname.clone());
 
@@ -132,30 +177,157 @@ impl SmtWriter {
                         continue;
                     }
 
-                    if let Some(props) = stock_props.get(stock_type) {
-                        for (prop_name, val) in props {
-                            let qname = format!(
-                                "{}_{}_{}_{}",
-                                self.spec_name, inst_name, stock_ref, prop_name
-                            );
+                    if let Some(props) = stock_props.get(&resolved_stock_type) {
+                        for (prop_name, template_val) in props {
+                            let qname = format!("{}_{}_{}", self.spec_name, var_prefix, prop_name);
+                            if !emitted.insert(qname.clone()) {
+                                continue;
+                            }
+
+                            // Check for property override (e.g., "s2.v" → 20)
+                            let override_key = format!("{}.{}", var_prefix, prop_name);
+                            let val = prop_overrides
+                                .get(&override_key)
+                                .cloned()
+                                .unwrap_or(template_val.clone());
 
                             // Map stock_type_prop → qualified name
-                            let stock_key = format!("{}_{}", stock_type, prop_name);
+                            let stock_key = format!("{}_{}", resolved_stock_type, prop_name);
                             self.name_map.insert(stock_key, qname.clone());
 
                             // Map flow_type.stock_ref.prop → qualified name
                             let flow_key = format!("{}_{}_{}", flow_type, stock_ref, prop_name);
                             self.name_map.insert(flow_key, qname.clone());
 
-                            let sort = val_sort(val);
+                            // Map inst.stock_ref.prop → qualified name (for runtime resolution)
+                            let inst_key = format!("{}_{}_{}", inst_name, stock_ref, prop_name);
+                            self.name_map.insert(inst_key, qname.clone());
+
+                            let sort = val_sort(&val);
                             self.var_sorts.insert(qname.clone(), sort);
-                            vars.push((qname, val.clone()));
+                            vars.push((qname, val));
                         }
                     }
                 }
             }
         }
         vars
+    }
+
+    /// Encode constant definitions as Bool declarations and constraints.
+    ///
+    /// String literal constants → free Bool (no constraint).
+    /// Expression constants → declare + assert defining expression.
+    /// Negation `!x` → intermediate `x_neg` variable.
+    fn encode_constants(&mut self, prog: &ResolvedProgram) {
+        // First pass: register names and declare literal (non-expr) constants
+        for cdef in &prog.constants {
+            let qname = format!("{}_{}", self.spec_name, cdef.name);
+            self.name_map.insert(cdef.name.clone(), qname.clone());
+            self.var_sorts.insert(qname.clone(), "Bool");
+            if cdef.expr.is_none() {
+                self.declare(&format!("{}_0", qname), "Bool");
+            }
+        }
+        // Second pass: process expression constants (intermediates declared first)
+        for cdef in &prog.constants {
+            if let Some(expr) = &cdef.expr {
+                let qname = format!("{}_{}", self.spec_name, cdef.name);
+                let v0 = format!("{}_0", qname);
+                let rhs = self.encode_const_expr(expr, true);
+                // Declare the derived constant after intermediates
+                self.declare(&v0, "Bool");
+                self.assert_smt(&format!("(= {} {})", v0, rhs));
+            }
+        }
+    }
+
+    /// Encode a boolean constant expression, creating intermediates for
+    /// negation (`_neg`) and AND sub-expressions within OR.
+    /// `toplevel` = true means the result goes directly into the const variable
+    /// (no intermediate for the outermost AND).
+    fn encode_const_expr(&mut self, expr: &Expr, toplevel: bool) -> String {
+        match expr {
+            Expr::Var(name) => {
+                let qname = self.resolve_const_name(name);
+                format!("{}_0", qname)
+            }
+            Expr::UnOp {
+                op: UnOp::Not,
+                expr: inner,
+            } => {
+                if let Expr::Var(name) = inner.as_ref() {
+                    let base_q = self.resolve_const_name(name);
+                    let neg_name = format!("{}_neg", base_q);
+                    let neg_v0 = format!("{}_0", neg_name);
+                    self.declare(&neg_v0, "Bool");
+                    self.assert_smt(&format!("(= {} (not {}_0))", neg_v0, base_q));
+                    neg_v0
+                } else {
+                    let inner_smt = self.encode_const_expr(inner, false);
+                    format!("(not {})", inner_smt)
+                }
+            }
+            Expr::BinOp {
+                op: BinOp::And,
+                left,
+                right,
+            } => {
+                let l = self.encode_const_expr(left, false);
+                let r = self.encode_const_expr(right, false);
+                if toplevel {
+                    // Top-level AND: encode inline, Go reverses operand order
+                    format!("(and {} {})", r, l)
+                } else {
+                    // Nested AND (inside OR): create intermediate variable
+                    let l_base = self.const_expr_base_name(left);
+                    let r_base = self.const_expr_base_name(right);
+                    let int_name = format!("{}_{}", l_base, r_base);
+                    let int_v0 = format!("{}_0", int_name);
+                    self.declare(&int_v0, "Bool");
+                    self.assert_smt(&format!("(= {} (and {} {}))", int_v0, l, r));
+                    int_v0
+                }
+            }
+            Expr::BinOp {
+                op: BinOp::Or,
+                left,
+                right,
+            } => {
+                // Go processes right sub-tree first, then reverses OR operand order
+                let r = self.encode_const_expr(right, false);
+                let l = self.encode_const_expr(left, false);
+                format!("(or {} {})", r, l)
+            }
+            Expr::Lit(Val::Bool(b)) => if *b { "true" } else { "false" }.to_string(),
+            _ => "false".to_string(),
+        }
+    }
+
+    /// Resolve a constant name to its qualified form.
+    fn resolve_const_name(&self, name: &str) -> String {
+        self.name_map
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| format!("{}_{}", self.spec_name, name))
+    }
+
+    /// Get the qualified base name of a const expression (for AND intermediates).
+    fn const_expr_base_name(&self, expr: &Expr) -> String {
+        match expr {
+            Expr::Var(name) => self.resolve_const_name(name),
+            Expr::UnOp {
+                op: UnOp::Not,
+                expr: inner,
+            } => {
+                if let Expr::Var(name) = inner.as_ref() {
+                    format!("{}_neg", self.resolve_const_name(name))
+                } else {
+                    self.const_expr_base_name(inner)
+                }
+            }
+            _ => "tmp".to_string(),
+        }
     }
 
     /// Emit initial value declarations and constraints.
@@ -288,7 +460,12 @@ impl SmtWriter {
 
     /// Resolve a variable name to its qualified form.
     fn qualify_var(&self, name: &str, instance: &str) -> String {
-        format!("{}_{}", self.spec_name, self.qualify_local(name, instance))
+        // Check name_map for instance-level resolution (handles target swaps)
+        let local = self.qualify_local(name, instance);
+        if let Some(qname) = self.name_map.get(&local) {
+            return qname.clone();
+        }
+        format!("{}_{}", self.spec_name, local)
     }
 
     /// Qualify a local name (may contain dots) relative to an instance.
@@ -558,19 +735,16 @@ impl SmtWriter {
     }
 
     /// Encode invariants (assertions and assumptions).
+    /// Go compiler emits assertions (negated) first, then assumptions.
     fn encode_invariants(&mut self, prog: &ResolvedProgram) {
-        // For each invariant, generate temporal constraint over all round versions
         let num_rounds = prog.rounds;
 
+        // First pass: assertions (negated for counterexample search)
         for inv in &prog.invariants {
             match inv {
                 Invariant::Assert { expr, temporal } => {
                     let negated = self.encode_temporal_negated(expr, temporal, num_rounds);
                     self.assertions.push(format!("(assert {})", negated));
-                }
-                Invariant::Assume { expr, temporal } => {
-                    let assumed = self.encode_temporal(expr, temporal, num_rounds);
-                    self.assertions.push(format!("(assert {})", assumed));
                 }
                 Invariant::AssertWhen {
                     guard,
@@ -581,6 +755,17 @@ impl SmtWriter {
                         self.encode_when_temporal_negated(guard, body, temporal, num_rounds);
                     self.assertions.push(format!("(assert {})", negated));
                 }
+                _ => {}
+            }
+        }
+
+        // Second pass: assumptions
+        for inv in &prog.invariants {
+            match inv {
+                Invariant::Assume { expr, temporal } => {
+                    let assumed = self.encode_temporal(expr, temporal, num_rounds);
+                    self.assertions.push(format!("(assert {})", assumed));
+                }
                 Invariant::AssumeWhen {
                     guard,
                     body,
@@ -589,6 +774,7 @@ impl SmtWriter {
                     let assumed = self.encode_when_temporal(guard, body, temporal, num_rounds);
                     self.assertions.push(format!("(assert {})", assumed));
                 }
+                _ => {}
             }
         }
     }
@@ -600,8 +786,8 @@ impl SmtWriter {
             .collect();
 
         match temporal {
-            Temporal::Always => format!("(and {})", round_exprs.join(" ")),
-            Temporal::Eventually => format!("(or {})", round_exprs.join(" ")),
+            Temporal::Always => smt_and(&round_exprs),
+            Temporal::Eventually => smt_or(&round_exprs),
             Temporal::EventuallyAlways => {
                 // (or P_N (and P_{N-1} P_N) ... (and P_0 ... P_N))
                 let n = num_rounds as usize;
@@ -638,14 +824,12 @@ impl SmtWriter {
         // Negate: always → or(not), eventually → and(not), etc.
         match temporal {
             Temporal::Always => {
-                let negated: Vec<String> =
-                    round_exprs.iter().map(|e| format!("(not {})", e)).collect();
-                format!("(or {})", negated.join(" "))
+                let negated: Vec<String> = round_exprs.iter().map(|e| negate_smt_expr(e)).collect();
+                smt_or(&negated)
             }
             Temporal::Eventually => {
-                let negated: Vec<String> =
-                    round_exprs.iter().map(|e| format!("(not {})", e)).collect();
-                format!("(and {})", negated.join(" "))
+                let negated: Vec<String> = round_exprs.iter().map(|e| negate_smt_expr(e)).collect();
+                smt_and(&negated)
             }
             _ => {
                 // For complex temporals, negate the whole thing
@@ -736,6 +920,7 @@ impl SmtWriter {
 pub fn encode_program(prog: &ResolvedProgram, spec_name: &str) -> String {
     let mut w = SmtWriter::new(spec_name);
     w.build_mappings(prog);
+    w.encode_constants(prog);
     w.encode_initial_values();
 
     for _ in 0..prog.rounds {
@@ -773,6 +958,34 @@ fn parse_synthetic_val(stock_type: &str) -> Val {
 }
 
 /// Convert a Val to SMT-LIB2 literal string.
+/// Negate an SMT expression. Simple variables use `(not (= x true))`
+/// to match Go output; compound expressions use `(not expr)`.
+fn negate_smt_expr(e: &str) -> String {
+    if e.starts_with('(') {
+        format!("(not {})", e)
+    } else {
+        format!("(not (= {} true))", e)
+    }
+}
+
+/// Build `(and ...)` that avoids redundant wrapping for single elements.
+fn smt_and(exprs: &[String]) -> String {
+    if exprs.len() == 1 {
+        exprs[0].clone()
+    } else {
+        format!("(and {})", exprs.join(" "))
+    }
+}
+
+/// Build `(or ...)` that avoids redundant wrapping for single elements.
+fn smt_or(exprs: &[String]) -> String {
+    if exprs.len() == 1 {
+        exprs[0].clone()
+    } else {
+        format!("(or {})", exprs.join(" "))
+    }
+}
+
 fn val_to_smt(val: &Val) -> String {
     match val {
         Val::Nat(n) => format!("{}.0", n),
@@ -1285,6 +1498,98 @@ for 5 init{f = new fib;} run{
 
         // ITE condition uses qualified name (not this_value)
         assert!(smt.contains("(ite (= increment_f_value_0 0.0)"));
+    }
+
+    #[test]
+    fn e2e_strings() {
+        let src = r#"spec test;
+str1 = "is a fish";
+str2 = "tastes delicious with ginger";
+str3 = "native to North America";
+str4 = !str1 && str2;
+
+assume (str1 && str3) || str4;
+assert str3;"#;
+
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        let lines = normalize_smt(&smt);
+
+        // All string vars declared as Bool
+        assert!(lines.contains(&"(declare-fun test_str1_0 () Bool)".into()));
+        assert!(lines.contains(&"(declare-fun test_str2_0 () Bool)".into()));
+        assert!(lines.contains(&"(declare-fun test_str3_0 () Bool)".into()));
+        assert!(lines.contains(&"(declare-fun test_str4_0 () Bool)".into()));
+
+        // Negation intermediate
+        assert!(lines.contains(&"(declare-fun test_str1_neg_0 () Bool)".into()));
+        assert!(lines.contains(&"(assert (= test_str1_neg_0 (not test_str1_0)))".into()));
+
+        // str4 = !str1 && str2
+        assert!(
+            lines.contains(&"(assert (= test_str4_0 (and test_str2_0 test_str1_neg_0)))".into())
+        );
+
+        // Negated assertion
+        assert!(lines.contains(&"(assert (not (= test_str3_0 true)))".into()));
+
+        // Assumption
+        assert!(lines.contains(&"(assert (or (and test_str1_0 test_str3_0) test_str4_0))".into()));
+    }
+
+    #[test]
+    fn e2e_strings2() {
+        let src = r#"spec test;
+str1 = "is a fish";
+str2 = "tastes delicious with ginger";
+str3 = "native to North America";
+str4 = "walks on four legs";
+str5 = "has a tail";
+str6 = "is blue";
+str7 = (str1 && str2) || (str3 && str4);
+str8 = str6 || str5 && str1;"#;
+
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        let lines = normalize_smt(&smt);
+
+        // AND intermediates
+        assert!(lines.contains(&"(declare-fun test_str3_test_str4_0 () Bool)".into()));
+        assert!(lines.contains(&"(declare-fun test_str1_test_str2_0 () Bool)".into()));
+        assert!(lines.contains(&"(declare-fun test_str5_test_str1_0 () Bool)".into()));
+
+        // AND constraints
+        assert!(
+            lines.contains(
+                &"(assert (= test_str3_test_str4_0 (and test_str3_0 test_str4_0)))".into()
+            )
+        );
+        assert!(
+            lines.contains(
+                &"(assert (= test_str1_test_str2_0 (and test_str1_0 test_str2_0)))".into()
+            )
+        );
+        assert!(
+            lines.contains(
+                &"(assert (= test_str5_test_str1_0 (and test_str5_0 test_str1_0)))".into()
+            )
+        );
+
+        // str7 = OR of AND intermediates
+        assert!(lines.contains(
+            &"(assert (= test_str7_0 (or test_str3_test_str4_0 test_str1_test_str2_0)))".into()
+        ));
+
+        // str8 = OR
+        assert!(
+            lines.contains(
+                &"(assert (= test_str8_0 (or test_str5_test_str1_0 test_str6_0)))".into()
+            )
+        );
     }
 
     #[test]

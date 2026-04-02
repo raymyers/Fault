@@ -202,10 +202,16 @@ pub struct CompDef {
 }
 
 /// A constant declaration.
+///
+/// For string-based boolean propositions (e.g., `str4 = !str1 && str2`),
+/// `value` is `Bool(false)` and `expr` holds the defining expression.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConstDef {
     pub name: Name,
     pub value: Val,
+    /// Optional defining expression (for derived boolean propositions).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub expr: Option<Expr>,
 }
 
 // ── Top-level structures (Syntax.lean:128–145) ──────────────────────

@@ -175,11 +175,15 @@ impl Parser {
             None
         };
 
-        // Convert string decls into constants (strings are Val::Str or compound exprs)
-        for (sname, _expr) in string_decls {
+        // Convert string decls into constants.
+        // String literals → Bool(false), no expr (free Bool in SMT).
+        // Boolean expressions referencing other strings → Bool(false) + expr.
+        for (sname, sexpr) in string_decls {
+            let is_literal = matches!(&sexpr, Expr::Lit(Val::Str(_)));
             constants.push(ConstDef {
                 name: sname,
-                value: Val::Bool(false), // strings compile to bool false
+                value: Val::Bool(false),
+                expr: if is_literal { None } else { Some(sexpr) },
             });
         }
 
@@ -1094,7 +1098,11 @@ impl Parser {
                 let name = self.parse_dotted_name()?;
                 if self.eat(TokenKind::Assign) {
                     let val = self.parse_property_value()?;
-                    consts.push(ConstDef { name, value: val });
+                    consts.push(ConstDef {
+                        name,
+                        value: val,
+                        expr: None,
+                    });
                 }
                 self.eat_semi();
             }
@@ -1103,7 +1111,11 @@ impl Parser {
             let name = self.parse_dotted_name()?;
             if self.eat(TokenKind::Assign) {
                 let val = self.parse_property_value()?;
-                consts.push(ConstDef { name, value: val });
+                consts.push(ConstDef {
+                    name,
+                    value: val,
+                    expr: None,
+                });
             }
         }
         self.eat_semi();

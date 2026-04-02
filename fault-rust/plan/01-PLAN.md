@@ -185,8 +185,8 @@ Strategy: use `pest`, `lalrpop`, or a hand-written recursive-descent parser targ
 - [x] Else-branch encoding (both branches generate SMT; ITE selects phi)
 - [x] History references across rounds — `history1-4.fspec` (round_entries snapshots)
 - [x] **Data test:** 3 new e2e tests (booleans, increment, history1) — 114 total tests pass
-- [ ] String-as-boolean (`Str → Bool(false)`) — `strings.fspec`
-- [ ] Stock swaps — `swaps/` directory
+- [x] String-as-boolean (`Str → Bool(false)`) — `strings.fspec`
+- [x] Stock swaps — `swaps/` directory
 - [ ] Multi-file imports — `imports/` directory
 - [ ] Bad spec error reporting — `badspecs/` directory
 - [ ] Indexes — `indexes.fspec`
