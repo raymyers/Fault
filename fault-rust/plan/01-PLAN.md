@@ -36,12 +36,12 @@ Additional Lean-derived test vectors live in `fault-rust/testdata/lean/` and are
 
 ## Milestone 0 — Project Skeleton
 
-- [ ] `cargo init --lib fault-rust` with workspace layout
-- [ ] Crate structure: `fault_syntax`, `fault_resolve`, `fault_eval`, `fault_exec`, `fault_temporal`, `fault_smt`, `fault_cli`
-- [ ] CI: `cargo test`, `cargo clippy`, `cargo fmt --check`
-- [ ] Build Go oracle binary in CI (or document manual step)
-- [ ] Copy initial test fixtures from `generator/testdata/` into `fault-rust/testdata/`
-- [ ] Scaffold `oracle.sh` that runs Go compiler and writes `expected.*`
+- [x] `cargo init --lib fault-rust` with workspace layout
+- [x] Crate structure: `fault_syntax`, `fault_resolve`, `fault_eval`, `fault_exec`, `fault_temporal`, `fault_smt`, `fault_cli`
+- [x] CI: `cargo test`, `cargo clippy`, `cargo fmt --check`
+- [x] Build Go oracle binary in CI (or document manual step)
+- [x] Copy initial test fixtures from `generator/testdata/` into `fault-rust/testdata/`
+- [x] Scaffold `oracle.sh` that runs Go compiler and writes `expected.*`
 
 ---
 

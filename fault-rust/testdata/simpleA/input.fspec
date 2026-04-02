@@ -1,0 +1,19 @@
+spec simpleA;
+
+def st = stock{
+    value: 30,
+};
+
+def fl = flow{
+    active: false,
+    vault: new st,
+    fn: func{
+        if vault.value > 4 {
+           vault.value <- vault.value - 2;
+        }
+    },
+};
+
+for 1 init{l = new fl;} run {
+    l.fn;
+}

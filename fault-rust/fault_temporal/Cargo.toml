@@ -1,0 +1,9 @@
+[package]
+name = "fault_temporal"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+fault_syntax = { path = "../fault_syntax" }
+fault_eval = { path = "../fault_eval" }
+fault_exec = { path = "../fault_exec" }

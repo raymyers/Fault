@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "fault_syntax",
+    "fault_resolve",
+    "fault_eval",
+    "fault_exec",
+    "fault_temporal",
+    "fault_smt",
+    "fault_cli",
+]
+resolver = "2"

@@ -1,0 +1,8 @@
+[package]
+name = "fault_eval"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+fault_syntax = { path = "../fault_syntax" }
+fault_resolve = { path = "../fault_resolve" }
