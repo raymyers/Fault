@@ -425,7 +425,8 @@ impl SmtWriter {
                 }
             }
             Stmt::Parallel(stmts) => self.encode_parallel(stmts, prog),
-            Stmt::Stay | Stmt::Advance(_) => {}
+            Stmt::Stay | Stmt::Advance(_)
+            | Stmt::CompoundTransition(_) | Stmt::ChooseTransition(_) => {}
         }
     }
 
@@ -1091,6 +1092,11 @@ impl SmtWriter {
 
 /// Encode a resolved program into SMT-LIB2 string.
 pub fn encode_program(prog: &ResolvedProgram, spec_name: &str) -> String {
+    // If this is a system with components and no stocks/flows, use statechart encoder
+    if !prog.components.is_empty() && prog.stocks.is_empty() && prog.flows.is_empty() {
+        return encode_statechart_only(prog, spec_name);
+    }
+
     let mut w = SmtWriter::new(spec_name);
     w.build_mappings(prog);
     w.encode_constants(prog);
@@ -1102,6 +1108,24 @@ pub fn encode_program(prog: &ResolvedProgram, spec_name: &str) -> String {
 
     w.encode_invariants(prog);
     w.emit()
+}
+
+/// Encode a program that only has components (no stocks/flows).
+fn encode_statechart_only(prog: &ResolvedProgram, spec_name: &str) -> String {
+    let mut enc = crate::statechart::StateChartEncoder::new(spec_name);
+    let (decls, asserts) = enc.encode(&prog.components, &prog.start_states);
+
+    let mut out = String::new();
+    out.push_str("(set-logic QF_NRA)\n");
+    for d in &decls {
+        out.push_str(d);
+        out.push('\n');
+    }
+    for a in &asserts {
+        out.push_str(a);
+        out.push('\n');
+    }
+    out
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────

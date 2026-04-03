@@ -136,6 +136,11 @@ pub enum Stmt {
     Seq(Vec<Stmt>),
     /// Concurrent (`|`) composition.
     Parallel(Vec<Stmt>),
+    /// Compound state transition (e.g., `advance(X) && advance(Y)`).
+    /// Preserved as raw Expr for statechart SMT encoding.
+    CompoundTransition(Expr),
+    /// Choose transition (solver picks which branch).
+    ChooseTransition(Expr),
 }
 
 // ── Temporal modalities (Syntax.lean:77) ────────────────────────────
@@ -248,11 +253,24 @@ pub struct Spec {
     pub run_block: Option<(u64, Vec<Stmt>, Vec<Stmt>)>,
 }
 
+/// A global declaration: `global name = new Type.Name;` with optional property swaps.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GlobalDecl {
+    pub name: Name,
+    pub type_name: String,
+    /// Property swaps: `(instance.prop, value_expr)`
+    pub swaps: Vec<(String, Expr)>,
+}
+
 /// A `.fsystem` file.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct System {
     pub name: Name,
     pub imports: Vec<Spec>,
+    /// Preserved import declarations (alias + path) for loading.
+    pub import_decls: Vec<ImportDecl>,
+    /// Global instance declarations.
+    pub globals: Vec<GlobalDecl>,
     pub components: Vec<CompDef>,
     pub invariants: Vec<Invariant>,
     /// Component name → initial state name.

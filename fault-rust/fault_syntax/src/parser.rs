@@ -207,6 +207,7 @@ impl Parser {
         self.expect(TokenKind::Semi)?;
 
         let mut imports = Vec::new();
+        let mut globals = Vec::new();
         let mut components = Vec::new();
         let mut invariants = Vec::new();
         let mut constants = Vec::new();
@@ -218,7 +219,7 @@ impl Parser {
                     imports.push(self.parse_import_decl()?);
                 }
                 TokenKind::Global => {
-                    self.parse_global_decl()?;
+                    globals.push(self.parse_global_decl()?);
                 }
                 TokenKind::Component => {
                     components.push(self.parse_component_decl()?);
@@ -256,9 +257,9 @@ impl Parser {
 
         // Stub specs from import declarations (actual loading done later).
         let import_specs: Vec<Spec> = imports
-            .into_iter()
+            .iter()
             .map(|decl| Spec {
-                name: decl.alias,
+                name: decl.alias.clone(),
                 constants: vec![],
                 stocks: vec![],
                 flows: vec![],
@@ -272,6 +273,8 @@ impl Parser {
         Ok(System {
             name,
             imports: import_specs,
+            import_decls: imports,
+            globals,
             components,
             invariants,
             start_states,
@@ -1182,34 +1185,40 @@ impl Parser {
 
     // ── System-specific ─────────────────────────────────────────────
 
-    fn parse_global_decl(&mut self) -> Result<(), ParseError> {
+    fn parse_global_decl(&mut self) -> Result<GlobalDecl, ParseError> {
         self.expect(TokenKind::Global)?;
-        let _name = self.expect(TokenKind::Ident)?.text;
+        let name = self.expect(TokenKind::Ident)?.text;
         self.expect(TokenKind::Assign)?;
 
-        // Parse the value (typically `new paramCall`)
-        if self.eat(TokenKind::New) {
-            let _type_name = self.parse_dotted_name()?;
+        let type_name = if self.eat(TokenKind::New) {
+            self.parse_dotted_name()?
         } else {
-            let _expr = self.parse_expression()?;
-        }
+            let expr = self.parse_expression()?;
+            format!("{:?}", expr)
+        };
         self.eat_semi();
 
-        // Parse optional swaps
+        // Parse optional property swaps
+        let mut swaps = Vec::new();
         while self.kind() == TokenKind::Ident || self.kind() == TokenKind::This {
             let saved = self.pos;
-            let _name = self.parse_dotted_name_raw()?;
+            let swap_parts = self.parse_dotted_name_raw()?;
             if self.kind() == TokenKind::Assign {
                 self.advance();
-                let _rhs = self.parse_expression()?;
+                let rhs = self.parse_expression()?;
                 self.eat_semi();
+                swaps.push((swap_parts.join("."), rhs));
             } else {
                 self.pos = saved;
                 break;
             }
         }
 
-        Ok(())
+        Ok(GlobalDecl {
+            name,
+            type_name,
+            swaps,
+        })
     }
 
     fn parse_component_decl(&mut self) -> Result<CompDef, ParseError> {
@@ -1247,7 +1256,7 @@ impl Parser {
                     self.advance();
                     let expr = self.parse_expression()?;
                     self.eat_semi();
-                    stmts.push(expr_to_stmt(expr)?);
+                    stmts.push(Stmt::ChooseTransition(expr));
                 }
                 _ => {
                     // Parse a full expression — handles advance(), stay(), leave(),
@@ -1423,7 +1432,22 @@ fn expr_to_stmt(expr: Expr) -> Result<Stmt, ParseError> {
             let name = expr_to_name(&expr);
             Ok(Stmt::Call(name))
         }
+        // Compound state transitions: advance(X) && advance(Y), advance(X) || advance(Y)
+        Expr::BinOp { .. } if expr_contains_state_op(&expr) => {
+            Ok(Stmt::CompoundTransition(expr))
+        }
         _ => Ok(Stmt::Call(format!("{:?}", expr))),
+    }
+}
+
+/// Check if an expression contains advance() or stay() pseudo-vars.
+fn expr_contains_state_op(expr: &Expr) -> bool {
+    match expr {
+        Expr::Var(name) => name.starts_with("__advance_") || name == "__stay",
+        Expr::BinOp { left, right, .. } => {
+            expr_contains_state_op(left) || expr_contains_state_op(right)
+        }
+        _ => false,
     }
 }
 

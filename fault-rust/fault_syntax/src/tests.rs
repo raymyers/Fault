@@ -112,6 +112,8 @@ fn system_json_roundtrip() {
     let sys = System {
         name: "test_sys".into(),
         imports: vec![],
+        import_decls: vec![],
+        globals: vec![],
         components: vec![CompDef {
             name: "ctrl".into(),
             states: vec![("on".into(), vec![Stmt::Advance("off".into())])],

@@ -1,11 +1,11 @@
 //! Import loader — reads imported `.fspec` files from disk and attaches
-//! them to the importing `Spec`. Handles circular imports by tracking
-//! already-visited paths.
+//! them to the importing `Spec` or `System`. Handles circular imports
+//! by tracking already-visited paths.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use fault_syntax::Spec;
+use fault_syntax::{Spec, System};
 use fault_syntax::parser::parse_spec;
 
 /// Load all imports for `spec`, resolving paths relative to `base_dir`.
@@ -61,3 +61,41 @@ fn load_imports_inner(spec: &mut Spec, base_dir: &Path, visited: &mut HashSet<Pa
         spec.imported_specs.push(imported);
     }
 }
+
+/// Load all imports for a `System`, resolving paths relative to `base_dir`.
+/// Replaces the stub Specs created by the parser with fully loaded ones.
+pub fn load_system_imports(sys: &mut System, base_dir: &Path) {
+    let mut loaded = Vec::new();
+    for decl in &sys.import_decls {
+        let import_path = base_dir.join(&decl.path);
+        let canonical = import_path
+            .canonicalize()
+            .unwrap_or_else(|_| import_path.clone());
+
+        let src = match std::fs::read_to_string(&canonical) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("warning: cannot read import {:?}: {}", decl.path, e);
+                continue;
+            }
+        };
+
+        let mut imported = match parse_spec(&src) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("warning: cannot parse import {:?}: {:?}", decl.path, e);
+                continue;
+            }
+        };
+
+        // Recursively load sub-imports
+        let import_dir = canonical.parent().unwrap_or(base_dir).to_path_buf();
+        let mut visited = HashSet::new();
+        visited.insert(canonical);
+        load_imports_inner(&mut imported, &import_dir, &mut visited);
+
+        loaded.push(imported);
+    }
+    sys.imports = loaded;
+}
+

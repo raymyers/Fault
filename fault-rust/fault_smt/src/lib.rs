@@ -9,5 +9,6 @@
 
 mod encode;
 mod ssa;
+pub mod statechart;
 
 pub use encode::encode_program;

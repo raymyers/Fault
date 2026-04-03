@@ -76,9 +76,9 @@ fn main() {
         .to_path_buf();
 
     match mode {
-        "smt" => run_smt_mode(&src, spec_name, &base_dir),
-        "parse" => run_parse_mode(&src),
-        "check" => run_check_mode(&src, spec_name, &base_dir),
+        "smt" => run_smt_mode(&src, spec_name, &base_dir, path),
+        "parse" => run_parse_mode(&src, path),
+        "check" => run_check_mode(&src, spec_name, &base_dir, path),
         other => {
             eprintln!("error: unknown mode '{}' (use smt, parse, or check)", other);
             process::exit(1);
@@ -94,54 +94,96 @@ fn print_usage() {
     eprintln!("  check  Check model with Z3 solver (default)");
 }
 
-fn parse_and_validate(src: &str, base_dir: &Path) -> fault_syntax::Spec {
-    let mut spec = match fault_syntax::parser::parse_spec(src) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("parse error: {}", e);
-            process::exit(1);
-        }
-    };
-
-    if !spec.import_decls.is_empty() {
-        fault_resolve::loader::load_imports(&mut spec, base_dir);
-    }
-
-    let errors = fault_resolve::validate::validate_spec(&spec);
-    if !errors.is_empty() {
-        for e in &errors {
-            eprintln!("{}", e);
-        }
-        process::exit(1);
-    }
-
-    spec
+enum ParsedInput {
+    Spec(fault_syntax::Spec),
+    System(fault_syntax::System),
 }
 
-fn run_smt_mode(src: &str, _spec_name: &str, base_dir: &Path) {
-    let spec = parse_and_validate(src, base_dir);
-    let name = spec.name.clone();
-    let resolved = fault_resolve::resolve_spec(spec);
+fn parse_and_validate(src: &str, base_dir: &Path, file_path: &str) -> ParsedInput {
+    let is_system = file_path.ends_with(".fsystem");
+
+    if is_system {
+        let mut sys = match fault_syntax::parser::parse_system(src) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("parse error: {}", e);
+                process::exit(1);
+            }
+        };
+        fault_resolve::loader::load_system_imports(&mut sys, base_dir);
+        ParsedInput::System(sys)
+    } else {
+        let mut spec = match fault_syntax::parser::parse_spec(src) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("parse error: {}", e);
+                process::exit(1);
+            }
+        };
+
+        if !spec.import_decls.is_empty() {
+            fault_resolve::loader::load_imports(&mut spec, base_dir);
+        }
+
+        let errors = fault_resolve::validate::validate_spec(&spec);
+        if !errors.is_empty() {
+            for e in &errors {
+                eprintln!("{}", e);
+            }
+            process::exit(1);
+        }
+
+        ParsedInput::Spec(spec)
+    }
+}
+
+fn resolve_input(input: ParsedInput) -> (fault_resolve::ResolvedProgram, String) {
+    match input {
+        ParsedInput::Spec(spec) => {
+            let name = spec.name.clone();
+            let resolved = fault_resolve::resolve_spec(spec);
+            (resolved, name)
+        }
+        ParsedInput::System(sys) => {
+            let name = sys.name.clone();
+            let resolved = fault_resolve::resolve_system(sys);
+            (resolved, name)
+        }
+    }
+}
+
+fn run_smt_mode(src: &str, _spec_name: &str, base_dir: &Path, file_path: &str) {
+    let input = parse_and_validate(src, base_dir, file_path);
+    let (resolved, name) = resolve_input(input);
     let smt = fault_smt::encode_program(&resolved, &name);
     print!("{}", smt);
 }
 
-fn run_parse_mode(src: &str) {
-    let spec = match fault_syntax::parser::parse_spec(src) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("parse error: {}", e);
-            process::exit(1);
-        }
-    };
-
-    println!("{:#?}", spec);
+fn run_parse_mode(src: &str, file_path: &str) {
+    if file_path.ends_with(".fsystem") {
+        let sys = match fault_syntax::parser::parse_system(src) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("parse error: {}", e);
+                process::exit(1);
+            }
+        };
+        println!("{:#?}", sys);
+    } else {
+        let spec = match fault_syntax::parser::parse_spec(src) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("parse error: {}", e);
+                process::exit(1);
+            }
+        };
+        println!("{:#?}", spec);
+    }
 }
 
-fn run_check_mode(src: &str, _spec_name: &str, base_dir: &Path) {
-    let spec = parse_and_validate(src, base_dir);
-    let name = spec.name.clone();
-    let resolved = fault_resolve::resolve_spec(spec);
+fn run_check_mode(src: &str, _spec_name: &str, base_dir: &Path, file_path: &str) {
+    let input = parse_and_validate(src, base_dir, file_path);
+    let (resolved, name) = resolve_input(input);
     let smt = fault_smt::encode_program(&resolved, &name);
 
     // Try to shell out to Z3

@@ -127,6 +127,8 @@ pub fn resolve_stmt(aliases: &AliasMap, scope: &[String], stmt: Stmt) -> Stmt {
                 .map(|s| resolve_stmt(aliases, scope, s))
                 .collect(),
         ),
+        Stmt::CompoundTransition(e) => Stmt::CompoundTransition(resolve_expr(aliases, scope, e)),
+        Stmt::ChooseTransition(e) => Stmt::ChooseTransition(resolve_expr(aliases, scope, e)),
     }
 }
 
@@ -191,7 +193,8 @@ pub fn merge_invariants(specs: &[Spec]) -> Vec<Invariant> {
 /// FlowAssign is NOT allowed.
 pub fn valid_in_state_func(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Advance(_) | Stmt::Stay | Stmt::Call(_) => true,
+        Stmt::Advance(_) | Stmt::Stay | Stmt::Call(_)
+        | Stmt::CompoundTransition(_) | Stmt::ChooseTransition(_) => true,
         Stmt::IfThenElse {
             then_branch,
             else_branch,
@@ -440,6 +443,7 @@ pub fn stmt_has_dots(stmt: &Stmt) -> bool {
                 || else_branch.iter().any(stmt_has_dots)
         }
         Stmt::Call(_) | Stmt::Advance(_) | Stmt::Stay => false,
+        Stmt::CompoundTransition(e) | Stmt::ChooseTransition(e) => has_dots(e),
         Stmt::Seq(ss) | Stmt::Parallel(ss) => ss.iter().any(stmt_has_dots),
     }
 }

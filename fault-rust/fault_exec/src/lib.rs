@@ -114,6 +114,9 @@ pub fn exec_stmt(
             // Canonical order: execute sequentially in declaration order
             labels.extend(exec_stmts(state, stmts, instances, func_map));
         }
+        Stmt::CompoundTransition(_) | Stmt::ChooseTransition(_) => {
+            labels.push("compound_transition".into());
+        }
     }
 
     labels
