@@ -191,7 +191,8 @@ Strategy: use `pest`, `lalrpop`, or a hand-written recursive-descent parser targ
 - [x] Bad spec error reporting — `badspecs/` directory
 - [x] Indexes — `indexes.fspec`
 - [x] `bathtub2.fspec` (multiple parallel flows)
-- [ ] Full statechart system — `statecharts/`
+- [x] Statechart basics (advanceand, advanceor, choose1, choose2, multioradvance) — 5 fixture tests
+- [ ] Statechart imports (mixedcalls, statechart, trigger) — `.fsystem` files importing `.fspec`
 - [ ] **Data test:** each of the above has oracle fixture; all pass
 
 ---
