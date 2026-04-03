@@ -3,7 +3,7 @@
 Close every gap found when running [Fault-lang/examples](https://github.com/Fault-lang/examples) and diffing internal `testdata/` fixtures.
 Goal: a user switching from the Go binary to the Rust binary gets correct results on every spec/system that Go handles, with no regressions on internal tests.
 
-**Status (2026-04-03):** 158 tests pass. 6 of 7 external examples produce correct results. One major gap remains: flow-instance encoding in mixed statechart+flow `.fsystem` files (`repl.fsystem`).
+**Status (2026-04-03):** 159 tests pass. **All 7 external examples produce correct results.** The major M17 gap (flow instances in mixed fsystem) is resolved.
 
 ---
 
@@ -80,7 +80,7 @@ Goal: a user switching from the Go binary to the Rust binary gets correct result
 | `cache_unkn.fspec` | COUNTEREXAMPLE | COUNTEREXAMPLE | ✅ |
 | `orchestrator.fspec` | CORRECT | CORRECT | ✅ |
 | `drone.fsystem` | **panics** (Go bug) | CORRECT | ✅ (Rust better) |
-| `repl.fsystem` | 218-line SMT / CORRECT | 56-line SMT / COUNTEREXAMPLE | ❌ Gap |
+| `repl.fsystem` | 218-line SMT / CORRECT | 144-line SMT / CORRECT | ✅ (fixed!) |
 
 - [ ] **14a. Import Fault-lang/examples into testdata** — copy each example into `testdata/examples/<name>/` with `input.fspec` (or `.fsystem`) and `expected.smt2` from Go oracle.
 
@@ -100,13 +100,13 @@ Goal: a user switching from the Go binary to the Rust binary gets correct result
 
 The `repl.fsystem` example uses `global record = new cache.record` and `global manager = new orchestrator.control` to create flow instances that are then invoked from statechart state functions (e.g. `record.lookup`, `manager.boot`). The Rust encoder does not expand these flow function calls inside state bodies.
 
-- [ ] **17a. Flow instance stock variable initialization** — `global record = new cache.record` must declare and initialize the stock variables (`repl_record_machine_blocks_0`, `repl_record_machine_table_0`, etc.) in the SMT encoding.
-  - Go: 79 declarations; Rust: only 28 (missing all flow stock variables).
+- [x] **17a. Flow instance stock variable initialization** — Fixed grouped import parser (`parse_import_decl` was only keeping last path in `import("a" "b")` blocks). Now all imported specs' flows and stocks are available.
+  - Commit `4a0a542`. 159 tests pass.
 
-- [ ] **17b. Flow function dispatch in state bodies** — when a state function calls `record.lookup` or `manager.boot`, the encoder must inline the corresponding flow function body, emitting the flow's stock variable assignments under the state-active ITE guard.
-  - This is the core feature: bridging the statechart encoder with the flow encoder for mixed systems.
+- [x] **17b. Flow function dispatch in state bodies** — When state bodies contain `Call("record.lookup")` etc., the encoder now inlines the flow function body through `SmtWriter.encode_call()` before delegating transitions to `StateChartEncoder`. Effects are gated by the state's active flag via ITE.
+  - Commit `7c2cd4f`. `repl.fsystem` now returns CORRECT. 72 declarations (Go: 79).
 
-- [ ] **17c. Imported assertion propagation** — imported specs' assertions (from `cache.fspec` and `orchestrator.fspec`) must be carried into the fsystem's invariant set with correct variable qualification.
+- [x] **17c. Imported assertion propagation** — Already working via `merge_invariants()`. Cache and orchestrator assertions correctly appear in repl.fsystem's SMT with proper variable qualification.
 
 ---
 
@@ -146,9 +146,9 @@ M11 (lexer/parser) ✅ DONE
   ├──→ M12 (SMT encoding) ✅ core done, 12c/12d cosmetic remain
   │     └──→ M13 (check mode) ✅ 13a done, 13b likely working
   │
-  └──→ M14 (external examples) — partially verified, fixture tests not yet added
+  └──→ M14 (external examples) — all 7 verified correct, fixture tests not yet added
                 │
-          M17 (flow instances in fsystem) ← MAJOR GAP, blocks repl.fsystem
+          M17 (flow instances in fsystem) ✅ DONE — repl.fsystem returns CORRECT
                 │
           M15 (CLI feature parity) — not started
                 │
@@ -166,3 +166,5 @@ M11 (lexer/parser) ✅ DONE
 | `f360486` | M12b | collect_modified_vars_deep, Dot flattening, read_current qualification |
 | `8ccef99` | M12c | const_sort for bare consts; encode_expr_at_round uses round_entries |
 | `41fc5da` | M12d | encode_expr_at_round auto-qualifies with spec_name prefix |
+| `4a0a542` | M17a | Fix grouped import parser (was only keeping last path) |
+| `7c2cd4f` | M17b | Flow function dispatch in state bodies (repl.fsystem CORRECT) |
