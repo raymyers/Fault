@@ -226,9 +226,10 @@ impl SmtWriter {
         for cdef in &prog.constants {
             let qname = format!("{}_{}", self.spec_name, cdef.name);
             self.name_map.insert(cdef.name.clone(), qname.clone());
-            self.var_sorts.insert(qname.clone(), "Bool");
+            let sort = const_sort(&cdef.value, cdef.expr.is_some());
+            self.var_sorts.insert(qname.clone(), sort);
             if cdef.expr.is_none() {
-                self.declare(&format!("{}_0", qname), "Bool");
+                self.declare(&format!("{}_0", qname), sort);
             }
         }
         // Register imported constants with their original spec prefix.
@@ -245,9 +246,10 @@ impl SmtWriter {
                     }
                 }
                 self.name_map.insert(cdef.name.clone(), qname.clone());
-                self.var_sorts.insert(qname.clone(), "Bool");
+                let sort = const_sort(&cdef.value, cdef.expr.is_some());
+                self.var_sorts.insert(qname.clone(), sort);
                 if cdef.expr.is_none() {
-                    self.declare(&format!("{}_0", qname), "Bool");
+                    self.declare(&format!("{}_0", qname), sort);
                 }
             }
         }
@@ -1116,7 +1118,16 @@ impl SmtWriter {
             Expr::Var(name) => {
                 // Resolve through name_map (invariant stock refs → qualified)
                 let resolved = self.name_map.get(name).cloned().unwrap_or(name.clone());
-                format!("{}_{}", resolved, round)
+                // Use round_entries if available; constants (never assigned)
+                // always stay at version 0.
+                let ridx = round as usize;
+                if ridx < self.round_entries.len() {
+                    if let Some(ver) = self.round_entries[ridx].get(&resolved) {
+                        return ver.clone();
+                    }
+                }
+                // Fallback: constant or untracked → version 0
+                format!("{}_0", resolved)
             }
             Expr::BinOp { op, left, right } => {
                 let l = self.encode_expr_at_round(left, round);
@@ -2132,6 +2143,21 @@ fn flatten_dot_chain(expr: &Expr) -> Vec<String> {
             parts
         }
         _ => vec![],
+    }
+}
+
+/// Determine SMT sort for a constant definition.
+/// - String constants and expression constants (propositions) → Bool
+/// - Bare constants (Unknown) and numeric constants → Real
+fn const_sort(val: &Val, has_expr: bool) -> &'static str {
+    if has_expr {
+        return "Bool";
+    }
+    match val {
+        Val::Str(_) => "Bool",
+        Val::Bool(_) => "Bool",
+        Val::Unknown | Val::Nat(_) | Val::Float(_) => "Real",
+        _ => "Real",
     }
 }
 
