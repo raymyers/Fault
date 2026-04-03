@@ -134,7 +134,7 @@ fn run_check(src: &str, base_dir: &Path, file_path: &str, opts: &RunOptions) -> 
         )
     });
 
-    let smt = fault_smt::encode_program(&resolved, &name);
+    let (smt, mut event_log) = fault_smt::encode_program_with_log(&resolved, &name);
 
     if !has_assertions {
         return Output {
@@ -177,7 +177,7 @@ fn run_check(src: &str, base_dir: &Path, file_path: &str, opts: &RunOptions) -> 
                                     format!("COUNTEREXAMPLE FOUND (assertion violated)\n{}", model_text)
                                 } else {
                                     let model = z3_parse::parse_model(&model_text);
-                                    z3_parse::format_counterexample(&model, &name)
+                                    z3_parse::format_counterexample(&model, &mut event_log)
                                 };
                                 Output { stdout, stderr: String::new(), exit_code: 0 }
                             }

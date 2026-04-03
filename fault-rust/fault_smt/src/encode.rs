@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use crate::event_log::EventLog;
 use crate::ssa::Ssa;
 use fault_resolve::ResolvedProgram;
 use fault_syntax::*;
@@ -62,6 +63,10 @@ struct SmtWriter {
     read_ssa: Option<Ssa>,
     /// Track already-declared SMT variables to avoid duplicates.
     declared: HashSet<String>,
+    /// Event log for producing human-readable output.
+    event_log: EventLog,
+    /// Current round number (1-based, for event logging).
+    current_round: u32,
 }
 
 impl SmtWriter {
@@ -85,6 +90,8 @@ impl SmtWriter {
             all_vars: Vec::new(),
             read_ssa: None,
             declared: HashSet::new(),
+            event_log: EventLog::new(spec_name),
+            current_round: 0,
         }
     }
 
@@ -417,6 +424,7 @@ impl SmtWriter {
 
     /// Encode one round of the run block, then snapshot for history.
     fn encode_round(&mut self, prog: &ResolvedProgram) {
+        self.current_round += 1;
         for stmt in &prog.run_block {
             self.encode_stmt(stmt, prog);
         }
@@ -502,11 +510,15 @@ impl SmtWriter {
                 && let Some(funcs) = self.flow_funcs.get(&flow_type).cloned()
                 && let Some((_, body)) = funcs.iter().find(|(n, _)| n == func_name)
             {
+                let display_name = format!("{}_{}", self.spec_name, call_name.replace('.', "_"));
+                let round = self.current_round;
+                self.event_log.log_function_entry(&display_name, round);
                 let body = body.clone();
                 for stmt in &body {
                     let resolved = self.resolve_flow_stmt(stmt, instance);
                     self.encode_stmt(&resolved, prog);
                 }
+                self.event_log.log_function_exit(&display_name);
             }
         }
     }
@@ -680,6 +692,7 @@ impl SmtWriter {
         };
 
         self.assert_smt(&format!("(= {} {})", new_name, smt_rhs));
+        self.event_log.log_variable_update(&new_name);
 
         // Sync read_ssa to see this write for subsequent reads in same branch
         if let Some(ref mut rssa) = self.read_ssa {
@@ -1772,24 +1785,35 @@ impl SmtWriter {
 
 /// Encode a resolved program into SMT-LIB2 string.
 pub fn encode_program(prog: &ResolvedProgram, spec_name: &str) -> String {
+    encode_program_with_log(prog, spec_name).0
+}
+
+/// Encode a resolved program, returning both the SMT string and an event log
+/// for producing human-readable output.
+pub fn encode_program_with_log(prog: &ResolvedProgram, spec_name: &str) -> (String, EventLog) {
     if !prog.components.is_empty() {
-        if prog.stocks.is_empty() && prog.flows.is_empty() {
-            return encode_statechart_only(prog, spec_name);
-        }
-        return encode_mixed_system(prog, spec_name);
+        let smt = if prog.stocks.is_empty() && prog.flows.is_empty() {
+            encode_statechart_only(prog, spec_name)
+        } else {
+            encode_mixed_system(prog, spec_name)
+        };
+        // Statechart/mixed systems don't have event logging yet
+        return (smt, EventLog::new(spec_name));
     }
 
     let mut w = SmtWriter::new(spec_name);
     w.build_mappings(prog);
     w.encode_constants(prog);
     w.encode_initial_values();
+    w.event_log.log_run_start(prog.rounds as u32);
 
     for _ in 0..prog.rounds {
         w.encode_round(prog);
     }
 
     w.encode_invariants(prog);
-    w.emit()
+    let smt = w.emit();
+    (smt, w.event_log)
 }
 
 /// Encode a system with both components (statechart) and imported flows.

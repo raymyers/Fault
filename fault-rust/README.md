@@ -39,17 +39,22 @@ cargo run --release -- -m parse -f input.fspec
 
 ### Example Output
 
+When a counterexample is found, the output shows a round-by-round trace
+matching the Go implementation's format:
+
 ```
 $ fault-rust -f testdata/asserts/input.fspec
-COUNTEREXAMPLE FOUND
-The following assertion can be violated:
 
-  test_target_value
-    step 0: 40.0
-    step 1: 40.0 → 20.0
-    step 2: 20.0 → 10.0
-    step 3: 10.0 → 5.0
-    step 4: 5.0 → 2.5
+Start model, run for 4 rounds
+-----------------------------------
+   Run function asserts_test_fn (round 1)
+      Set variable asserts_test_target_value to value 20.0
+   Run function asserts_test_fn (round 2)
+      asserts_test_target_value: 20.0 → 10.0
+   Run function asserts_test_fn (round 3)
+      asserts_test_target_value: 10.0 → 5.0
+   Run function asserts_test_fn (round 4)
+      asserts_test_target_value: 5.0 → 2.5
 ```
 
 When no assertion is violated:

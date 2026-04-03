@@ -8,7 +8,9 @@
 //! compiler's `generator/rules/` module.
 
 mod encode;
+pub mod event_log;
 mod ssa;
 pub mod statechart;
 
-pub use encode::encode_program;
+pub use encode::{encode_program, encode_program_with_log};
+pub use event_log::EventLog;
