@@ -1858,9 +1858,99 @@ fn encode_mixed_system(prog: &ResolvedProgram, spec_name: &str) -> String {
         });
 
         if uses_compound {
-            // Pre-resolve conditions and delegate to StateChartEncoder
+            // Process flow function calls from state bodies through SmtWriter,
+            // then delegate statechart transitions to StateChartEncoder.
+            //
+            // State bodies may contain Call("record.lookup") etc. that need
+            // the flow encoder to inline the function body (stock variable
+            // assignments). These must be processed per-state, in order,
+            // so the SSA versions are correct for subsequent ITE guards.
+            let mut stripped_components = Vec::new();
+            for comp in &prog.components {
+                let mut stripped_states = Vec::new();
+                for (state_name, body) in &comp.states {
+                    // Extract and process Call statements through SmtWriter
+                    let state_qname = format!("{}_{}_{}", spec_name, comp.name, state_name);
+                    let state_ver = w.ssa.current(&state_qname);
+                    let state_guard = format!("{}_{}", state_qname, state_ver);
+
+                    let calls: Vec<&Stmt> = body.iter().filter(|s| matches!(s, Stmt::Call(_))).collect();
+                    let rest: Vec<Stmt> = body.iter().filter(|s| !matches!(s, Stmt::Call(_))).cloned().collect();
+
+                    if !calls.is_empty() {
+                        // Collect all stock vars modified by the calls
+                        let pre_vars: BTreeMap<String, String> = w.all_vars.iter()
+                            .map(|v| (v.clone(), w.ssa.current_name(v)))
+                            .collect();
+
+                        for call_stmt in &calls {
+                            if let Stmt::Call(name) = call_stmt {
+                                w.encode_call(name, prog);
+                            }
+                        }
+
+                        // Find which stock vars were modified and gate them
+                        let mut modified = Vec::new();
+                        for (var, pre_name) in &pre_vars {
+                            let post_name = w.ssa.current_name(var);
+                            if post_name != *pre_name {
+                                modified.push((var.clone(), pre_name.clone(), post_name));
+                            }
+                        }
+
+                        // Emit ITE guard: if state active, keep flow effects; else carry forward
+                        if !modified.is_empty() {
+                            let block_id = w.block_counter;
+                            w.block_counter += 1;
+                            let bt = format!("block{}true_0", block_id);
+                            let bf = format!("block{}false_0", block_id);
+                            w.declare(&bt, "Bool");
+                            w.declare(&bf, "Bool");
+
+                            let mut true_parts = vec![
+                                format!("(= {} true)", bt),
+                                format!("(= {} false)", bf),
+                            ];
+                            let mut false_parts = vec![
+                                format!("(= {} false)", bt),
+                                format!("(= {} true)", bf),
+                            ];
+
+                            for (var, pre_name, post_name) in &modified {
+                                true_parts.push(format!("(= {} {})", post_name, post_name));
+                                // In false branch, create a carry-forward version
+                                let carry_ver = w.ssa.bump(var);
+                                let carry_name = format!("{}_{}", var, carry_ver);
+                                let sort = w.var_sorts.get(var).copied().unwrap_or("Real");
+                                w.declare(&carry_name, sort);
+                                false_parts.push(format!("(= {} {})", carry_name, pre_name));
+                            }
+
+                            let ite = format!(
+                                "(ite (= {} true) (and {}) (and {}))",
+                                state_guard,
+                                true_parts.join(" "),
+                                false_parts.join(" "),
+                            );
+                            w.assert_smt(&ite);
+                            w.assert_smt(&format!(
+                                "(or (and {} (not {})) (and (not {}) {}))",
+                                bt, bf, bt, bf
+                            ));
+                        }
+                    }
+
+                    stripped_states.push((state_name.clone(), rest));
+                }
+                stripped_components.push(CompDef {
+                    name: comp.name.clone(),
+                    states: stripped_states,
+                });
+            }
+
+            // Pre-resolve conditions and delegate transitions to StateChartEncoder
             let resolved_comps = pre_resolve_components(
-                &prog.components, spec_name, &w,
+                &stripped_components, spec_name, &w,
             );
             let mut version_state: BTreeMap<String, u32> = BTreeMap::new();
             for comp in &prog.components {
