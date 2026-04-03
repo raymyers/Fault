@@ -249,7 +249,7 @@ impl<'a> Lexer<'a> {
         }
 
         // Numbers: starts with digit, or '.' followed by digit
-        if ch.is_ascii_digit() {
+        if ch.is_ascii_digit() || (ch == b'.' && self.peek_at(1).is_ascii_digit()) {
             return self.lex_number(line, col);
         }
 
@@ -318,6 +318,22 @@ impl<'a> Lexer<'a> {
     fn lex_number(&mut self, line: usize, col: usize) -> Result<Token, LexError> {
         let start = self.pos;
         let mut is_float = false;
+
+        // Leading dot: .15 → 0.15
+        if self.peek() == b'.' {
+            self.advance(); // skip .
+            while !self.at_end() && self.peek().is_ascii_digit() {
+                self.advance();
+            }
+            let raw = String::from_utf8_lossy(&self.src[start..self.pos]).to_string();
+            let text = format!("0{}", raw); // ".15" → "0.15"
+            return Ok(Token {
+                kind: TokenKind::FloatLit,
+                text,
+                line,
+                col,
+            });
+        }
 
         // Check for hex/octal prefix
         if self.peek() == b'0' && !self.at_end() {
@@ -690,6 +706,17 @@ mod tests {
         assert_eq!(toks[0].text, "3.14");
         assert_eq!(toks[1].kind, TokenKind::FloatLit);
         assert_eq!(toks[2].kind, TokenKind::FloatLit);
+    }
+
+    #[test]
+    fn dot_prefix_float_literal() {
+        let toks = Lexer::new(".15 .5 .0").tokenize().unwrap();
+        assert_eq!(toks[0].kind, TokenKind::FloatLit);
+        assert_eq!(toks[0].text, "0.15");
+        assert_eq!(toks[1].kind, TokenKind::FloatLit);
+        assert_eq!(toks[1].text, "0.5");
+        assert_eq!(toks[2].kind, TokenKind::FloatLit);
+        assert_eq!(toks[2].text, "0.0");
     }
 
     #[test]
