@@ -39,7 +39,14 @@ impl StateChartEncoder {
 
     /// Full qualified name: specname_comp_state
     fn qname(&self, comp: &str, state: &str) -> String {
-        format!("{}_{}_{}", self.spec_name, comp, state)
+        // Cross-component reference: "otherComp.stateName" → spec_otherComp_stateName
+        if let Some(dot) = state.find('.') {
+            let target_comp = &state[..dot];
+            let target_state = &state[dot + 1..];
+            format!("{}_{}_{}", self.spec_name, target_comp, target_state)
+        } else {
+            format!("{}_{}_{}", self.spec_name, comp, state)
+        }
     }
 
     /// Declare a new SSA version of a state variable and return its name.
