@@ -1028,7 +1028,6 @@ fn cond_expr_to_smt(expr: &Expr) -> String {
             format!("(= {} true)", name)
         }
         Expr::UnOp { op: fault_syntax::UnOp::Not, expr: inner } => {
-            // For Not, don't wrap inner Bool var in (= x true) — just use bare name
             let inner_smt = cond_expr_to_smt_bare(inner);
             format!("(not {})", inner_smt)
         }
@@ -1038,6 +1037,38 @@ fn cond_expr_to_smt(expr: &Expr) -> String {
         Expr::BinOp { op: BinOp::Or, left, right } => {
             format!("(or {} {})", cond_expr_to_smt(left), cond_expr_to_smt(right))
         }
+        // Comparison operators
+        Expr::BinOp { op: BinOp::Eq, left, right } => {
+            format!("(= {} {})", cond_expr_to_smt_bare(left), cond_expr_to_smt_bare(right))
+        }
+        Expr::BinOp { op: BinOp::Neq, left, right } => {
+            format!("(not (= {} {}))", cond_expr_to_smt_bare(left), cond_expr_to_smt_bare(right))
+        }
+        Expr::BinOp { op: BinOp::Lt, left, right } => {
+            format!("(< {} {})", cond_expr_to_smt_bare(left), cond_expr_to_smt_bare(right))
+        }
+        Expr::BinOp { op: BinOp::Le, left, right } => {
+            format!("(<= {} {})", cond_expr_to_smt_bare(left), cond_expr_to_smt_bare(right))
+        }
+        Expr::BinOp { op: BinOp::Gt, left, right } => {
+            format!("(> {} {})", cond_expr_to_smt_bare(left), cond_expr_to_smt_bare(right))
+        }
+        Expr::BinOp { op: BinOp::Ge, left, right } => {
+            format!("(>= {} {})", cond_expr_to_smt_bare(left), cond_expr_to_smt_bare(right))
+        }
+        // Arithmetic operators (for nested expressions in conditions)
+        Expr::BinOp { op: BinOp::Add, left, right } => {
+            format!("(+ {} {})", cond_expr_to_smt_bare(left), cond_expr_to_smt_bare(right))
+        }
+        Expr::BinOp { op: BinOp::Sub, left, right } => {
+            format!("(- {} {})", cond_expr_to_smt_bare(left), cond_expr_to_smt_bare(right))
+        }
+        Expr::BinOp { op: BinOp::Mul, left, right } => {
+            format!("(* {} {})", cond_expr_to_smt_bare(left), cond_expr_to_smt_bare(right))
+        }
+        Expr::BinOp { op: BinOp::Div, left, right } => {
+            format!("(/ {} {})", cond_expr_to_smt_bare(left), cond_expr_to_smt_bare(right))
+        }
         Expr::Lit(val) => match val {
             fault_syntax::Val::Bool(b) => b.to_string(),
             fault_syntax::Val::Nat(n) => format!("{}.0", n),
@@ -1045,7 +1076,7 @@ fn cond_expr_to_smt(expr: &Expr) -> String {
             fault_syntax::Val::Str(s) => format!("\"{}\"", s),
             _ => format!("{:?}", val),
         },
-        _ => format!("UNHANDLED_COND({:?})", expr),
+        _ => panic!("cond_expr_to_smt: unhandled expression variant: {:?}", expr),
     }
 }
 
