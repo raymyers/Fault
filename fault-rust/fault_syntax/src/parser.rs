@@ -1114,6 +1114,12 @@ impl Parser {
                         value: val,
                         expr: None,
                     });
+                } else {
+                    consts.push(ConstDef {
+                        name,
+                        value: Val::Unknown,
+                        expr: None,
+                    });
                 }
                 self.eat_semi();
             }
@@ -1125,6 +1131,12 @@ impl Parser {
                 consts.push(ConstDef {
                     name,
                     value: val,
+                    expr: None,
+                });
+            } else {
+                consts.push(ConstDef {
+                    name,
+                    value: Val::Unknown,
                     expr: None,
                 });
             }
@@ -1812,5 +1824,22 @@ for 5 init{f = new fib;} run{
         assert_eq!(spec.flows[0].funcs.len(), 1);
         let (rounds, _, _) = spec.run_block.as_ref().unwrap();
         assert_eq!(*rounds, 5);
+    }
+
+    #[test]
+    fn parse_bare_const() {
+        let src = r#"spec cache;
+const table;
+const memory;
+const limit = 100;
+"#;
+        let spec = parse_spec(src).unwrap();
+        assert_eq!(spec.constants.len(), 3);
+        assert_eq!(spec.constants[0].name, "table");
+        assert_eq!(spec.constants[0].value, Val::Unknown);
+        assert_eq!(spec.constants[1].name, "memory");
+        assert_eq!(spec.constants[1].value, Val::Unknown);
+        assert_eq!(spec.constants[2].name, "limit");
+        assert_eq!(spec.constants[2].value, Val::Nat(100));
     }
 }
