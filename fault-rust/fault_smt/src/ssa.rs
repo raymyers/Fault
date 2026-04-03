@@ -73,6 +73,11 @@ impl Ssa {
     pub fn set_version(&mut self, name: &str, ver: u32) {
         self.versions.insert(name.to_string(), ver);
     }
+
+    /// Check whether a variable is already tracked.
+    pub fn has(&self, name: &str) -> bool {
+        self.versions.contains_key(name)
+    }
 }
 
 #[cfg(test)]

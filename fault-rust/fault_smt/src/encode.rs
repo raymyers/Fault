@@ -430,6 +430,54 @@ impl SmtWriter {
         }
     }
 
+    /// Collect modified vars, resolving Call stmts through flow function bodies.
+    fn collect_modified_vars_deep(&self, stmts: &[Stmt]) -> Vec<String> {
+        let mut vars = Vec::new();
+        for stmt in stmts {
+            self.collect_modified_deep(stmt, &mut vars);
+        }
+        vars
+    }
+
+    fn collect_modified_deep(&self, stmt: &Stmt, vars: &mut Vec<String>) {
+        match stmt {
+            Stmt::FlowAssign { name, .. } => {
+                if !vars.contains(name) {
+                    vars.push(name.clone());
+                }
+            }
+            Stmt::Call(call_name) => {
+                if let Some(dot_pos) = call_name.rfind('.') {
+                    let instance = &call_name[..dot_pos];
+                    let func_name = &call_name[dot_pos + 1..];
+                    if let Some(flow_type) = self.instances.get(instance)
+                        && let Some(funcs) = self.flow_funcs.get(flow_type)
+                        && let Some((_, body)) = funcs.iter().find(|(n, _)| n == func_name)
+                    {
+                        for s in body {
+                            let resolved = self.resolve_flow_stmt(s, instance);
+                            self.collect_modified_deep(&resolved, vars);
+                        }
+                    }
+                }
+            }
+            Stmt::IfThenElse { then_branch, else_branch, .. } => {
+                for s in then_branch {
+                    self.collect_modified_deep(s, vars);
+                }
+                for s in else_branch {
+                    self.collect_modified_deep(s, vars);
+                }
+            }
+            Stmt::Seq(stmts) | Stmt::Parallel(stmts) => {
+                for s in stmts {
+                    self.collect_modified_deep(s, vars);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Encode a function call: resolve instance → flow type → function body.
     fn encode_call(&mut self, call_name: &str, prog: &ResolvedProgram) {
         if let Some(dot_pos) = call_name.rfind('.') {
@@ -583,10 +631,23 @@ impl SmtWriter {
 
     /// Get the current versioned name for reading (respects read_ssa override).
     fn read_current(&mut self, name: &str) -> String {
-        if let Some(ref mut rssa) = self.read_ssa {
-            rssa.current_name(name)
+        // If the name is already tracked in SSA, use it directly.
+        // Otherwise, try with spec_name prefix (for run-block references
+        // like "cluster_p_instances" → "orchestrator_cluster_p_instances").
+        let effective = if self.ssa.has(name) {
+            name.to_string()
         } else {
-            self.ssa.current_name(name)
+            let qualified = format!("{}_{}", self.spec_name, name);
+            if self.ssa.has(&qualified) {
+                qualified
+            } else {
+                name.to_string()
+            }
+        };
+        if let Some(ref mut rssa) = self.read_ssa {
+            rssa.current_name(&effective)
+        } else {
+            self.ssa.current_name(&effective)
         }
     }
 
@@ -654,10 +715,12 @@ impl SmtWriter {
                 }
                 format!("{}_{}", name, index)
             }
-            Expr::Dot { expr, field } => {
-                let base = self.encode_expr(expr);
-                // Shouldn't occur after resolution, but handle gracefully
-                format!("{}_{}", base.trim_end_matches(')'), field)
+            Expr::Dot { .. } => {
+                // Flatten Dot chain to a qualified variable name, prepend spec_name.
+                let parts = flatten_dot_chain(expr);
+                let flat = parts.join("_");
+                let qname = format!("{}_{}", self.spec_name, flat);
+                self.read_current(&qname)
             }
             Expr::Choose(exprs) => {
                 if exprs.is_empty() {
@@ -686,8 +749,8 @@ impl SmtWriter {
 
         let ssa_before = self.ssa.clone();
 
-        let then_modified = collect_modified_vars(then_branch);
-        let else_modified = collect_modified_vars(else_branch);
+        let then_modified = self.collect_modified_vars_deep(then_branch);
+        let else_modified = self.collect_modified_vars_deep(else_branch);
 
         let mut all_modified = then_modified.clone();
         for v in &else_modified {
