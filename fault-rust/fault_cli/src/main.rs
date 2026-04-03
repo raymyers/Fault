@@ -1,20 +1,22 @@
 //! CLI for the Fault bounded model-checking compiler (Rust implementation).
 //!
 //! Usage:
-//!   fault-rust -f input.fspec           # check model (requires Z3)
-//!   fault-rust -m smt -f input.fspec    # emit SMT-LIB2
-//!   fault-rust -m parse -f input.fspec  # parse and dump AST (debug)
+//!   fault-rust -f input.fspec               # check model (requires Z3)
+//!   fault-rust -m smt -f input.fspec        # emit SMT-LIB2
+//!   fault-rust -m parse -f input.fspec      # parse and dump AST (debug)
+//!   fault-rust -m check --raw -f input.fspec  # raw Z3 model output
 
 use std::fs;
 use std::process;
 
-use fault_cli::Mode;
+use fault_cli::{Mode, RunOptions};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     let mut file_path: Option<&str> = None;
     let mut mode_str = "check";
+    let mut opts = RunOptions::default();
 
     let mut i = 1;
     while i < args.len() {
@@ -32,6 +34,9 @@ fn main() {
                         process::exit(1);
                     }
                 };
+            }
+            "--raw" => {
+                opts.raw = true;
             }
             "-h" | "--help" => {
                 print_usage();
@@ -73,16 +78,18 @@ fn main() {
         }
     };
 
-    let output = fault_cli::run(mode, &src, path);
+    let output = fault_cli::run_with_options(mode, &src, path, &opts);
     print!("{}", output.stdout);
     eprint!("{}", output.stderr);
     process::exit(output.exit_code);
 }
 
 fn print_usage() {
-    eprintln!("Usage: fault-rust [-m <mode>] -f <input.fspec>");
+    eprintln!("Usage: fault-rust [-m <mode>] [--raw] -f <input.fspec>");
     eprintln!("Modes:");
     eprintln!("  smt    Emit SMT-LIB2 encoding");
     eprintln!("  parse  Parse and dump AST (debug)");
     eprintln!("  check  Check model with Z3 solver (default)");
+    eprintln!("Options:");
+    eprintln!("  --raw  Print raw Z3 model output (check mode only)");
 }

@@ -3,6 +3,8 @@
 //! Extracts the core logic from `main` so it can be unit-tested
 //! without `process::exit`.
 
+pub mod z3_parse;
+
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,6 +12,12 @@ pub enum Mode {
     Smt,
     Parse,
     Check,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RunOptions {
+    /// When true, print raw Z3 model output instead of friendly format.
+    pub raw: bool,
 }
 
 #[derive(Debug)]
@@ -70,6 +78,11 @@ fn resolve_input(input: ParsedInput) -> (fault_resolve::ResolvedProgram, String)
 /// For `Mode::Check`, the caller can pass `src` and `file_path` but Z3
 /// invocation is handled inline; when Z3 is unavailable, SMT is printed.
 pub fn run(mode: Mode, src: &str, file_path: &str) -> Output {
+    run_with_options(mode, src, file_path, &RunOptions::default())
+}
+
+/// Like [`run`] but accepts additional options (e.g. `--raw`).
+pub fn run_with_options(mode: Mode, src: &str, file_path: &str, opts: &RunOptions) -> Output {
     let base_dir = Path::new(file_path)
         .parent()
         .unwrap_or(Path::new("."))
@@ -78,7 +91,7 @@ pub fn run(mode: Mode, src: &str, file_path: &str) -> Output {
     match mode {
         Mode::Smt => run_smt(src, &base_dir, file_path),
         Mode::Parse => run_parse(src, file_path),
-        Mode::Check => run_check(src, &base_dir, file_path),
+        Mode::Check => run_check(src, &base_dir, file_path, opts),
     }
 }
 
@@ -106,7 +119,7 @@ fn run_parse(src: &str, file_path: &str) -> Output {
     }
 }
 
-fn run_check(src: &str, base_dir: &Path, file_path: &str) -> Output {
+fn run_check(src: &str, base_dir: &Path, file_path: &str, opts: &RunOptions) -> Output {
     let input = match parse_and_validate(src, base_dir, file_path) {
         Ok(i) => i,
         Err(e) => return Output { stdout: String::new(), stderr: e, exit_code: 1 },
@@ -157,15 +170,19 @@ fn run_check(src: &str, base_dir: &Path, file_path: &str) -> Output {
                     if let Some(result_line) = lines.first() {
                         match *result_line {
                             "sat" => {
-                                let mut stdout = "COUNTEREXAMPLE FOUND (assertion violated)\n".to_string();
-                                for line in &lines[1..] {
-                                    stdout.push_str(line);
-                                    stdout.push('\n');
-                                }
+                                let model_text: String =
+                                    lines[1..].iter().flat_map(|l| [*l, "\n"]).collect();
+
+                                let stdout = if opts.raw {
+                                    format!("COUNTEREXAMPLE FOUND (assertion violated)\n{}", model_text)
+                                } else {
+                                    let model = z3_parse::parse_model(&model_text);
+                                    z3_parse::format_counterexample(&model, &name)
+                                };
                                 Output { stdout, stderr: String::new(), exit_code: 0 }
                             }
                             "unsat" => Output {
-                                stdout: "CORRECT (no counterexample found)\n".into(),
+                                stdout: "Fault could not find a failure case. All good!\n".into(),
                                 stderr: String::new(),
                                 exit_code: 0,
                             },

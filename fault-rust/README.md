@@ -30,8 +30,32 @@ export SOLVERCMD="z3"
 export SOLVERARG="-in"
 cargo run --release -- -f input.fspec
 
+# Check mode with raw Z3 model output
+cargo run --release -- -m check --raw -f input.fspec
+
 # Parse mode (debug AST dump)
 cargo run --release -- -m parse -f input.fspec
+```
+
+### Example Output
+
+```
+$ fault-rust -f testdata/asserts/input.fspec
+COUNTEREXAMPLE FOUND
+The following assertion can be violated:
+
+  test_target_value
+    step 0: 40.0
+    step 1: 40.0 → 20.0
+    step 2: 20.0 → 10.0
+    step 3: 10.0 → 5.0
+    step 4: 5.0 → 2.5
+```
+
+When no assertion is violated:
+```
+$ fault-rust -f testdata/examples/orchestrator/orchestrator.fspec
+Fault could not find a failure case. All good!
 ```
 
 ## Testing
