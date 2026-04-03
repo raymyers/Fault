@@ -1118,16 +1118,27 @@ impl SmtWriter {
             Expr::Var(name) => {
                 // Resolve through name_map (invariant stock refs → qualified)
                 let resolved = self.name_map.get(name).cloned().unwrap_or(name.clone());
+                // Try spec-qualified variant if unresolved
+                let effective = if self.ssa.has(&resolved) {
+                    resolved
+                } else {
+                    let qualified = format!("{}_{}", self.spec_name, resolved);
+                    if self.ssa.has(&qualified) {
+                        qualified
+                    } else {
+                        resolved
+                    }
+                };
                 // Use round_entries if available; constants (never assigned)
                 // always stay at version 0.
                 let ridx = round as usize;
                 if ridx < self.round_entries.len() {
-                    if let Some(ver) = self.round_entries[ridx].get(&resolved) {
+                    if let Some(ver) = self.round_entries[ridx].get(&effective) {
                         return ver.clone();
                     }
                 }
                 // Fallback: constant or untracked → version 0
-                format!("{}_0", resolved)
+                format!("{}_0", effective)
             }
             Expr::BinOp { op, left, right } => {
                 let l = self.encode_expr_at_round(left, round);
