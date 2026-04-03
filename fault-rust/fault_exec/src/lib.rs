@@ -642,4 +642,282 @@ mod tests {
         assert_eq!(instances.get("l"), Some(&"fl".to_string()));
         assert_eq!(state.get_var("value"), SVal::Real(99.0));
     }
+
+    #[test]
+    fn exec_if_nil_condition_skips() {
+        let func_map = FlowFuncMap::new();
+        let instances = InstanceMap::new();
+        let mut state = FaultState {
+            env: HashMap::from([("x".into(), SVal::Real(5.0))]),
+            round: 0,
+            comp_state: HashMap::new(),
+            history: HashMap::new(),
+        };
+
+        // Condition references undefined var → evaluates to Nil
+        let stmt = Stmt::IfThenElse {
+            cond: Expr::Var("undefined_var".into()),
+            then_branch: vec![Stmt::FlowAssign {
+                name: "x".into(),
+                op: FlowOp::Assign,
+                expr: Expr::Lit(Val::Nat(99)),
+            }],
+            else_branch: vec![Stmt::FlowAssign {
+                name: "x".into(),
+                op: FlowOp::Assign,
+                expr: Expr::Lit(Val::Nat(0)),
+            }],
+        };
+        let labels = exec_stmt(&mut state, &stmt, &instances, &func_map);
+        assert_eq!(state.get_var("x"), SVal::Real(5.0)); // unchanged
+        assert!(labels.contains(&"branch:nil".to_string()));
+    }
+
+    #[test]
+    fn exec_advance_emits_label() {
+        let func_map = FlowFuncMap::new();
+        let instances = InstanceMap::new();
+        let mut state = FaultState {
+            env: HashMap::new(),
+            round: 0,
+            comp_state: HashMap::new(),
+            history: HashMap::new(),
+        };
+
+        let labels = exec_stmt(
+            &mut state,
+            &Stmt::Advance("this.running".into()),
+            &instances,
+            &func_map,
+        );
+        assert_eq!(labels, vec!["advance:this.running"]);
+    }
+
+    #[test]
+    fn exec_stay_emits_label() {
+        let func_map = FlowFuncMap::new();
+        let instances = InstanceMap::new();
+        let mut state = FaultState {
+            env: HashMap::new(),
+            round: 0,
+            comp_state: HashMap::new(),
+            history: HashMap::new(),
+        };
+
+        let labels = exec_stmt(&mut state, &Stmt::Stay, &instances, &func_map);
+        assert_eq!(labels, vec!["stay"]);
+    }
+
+    #[test]
+    fn exec_seq_executes_in_order() {
+        let func_map = FlowFuncMap::new();
+        let instances = InstanceMap::new();
+        let mut state = FaultState {
+            env: HashMap::from([("x".into(), SVal::Real(0.0))]),
+            round: 0,
+            comp_state: HashMap::new(),
+            history: HashMap::new(),
+        };
+
+        let stmt = Stmt::Seq(vec![
+            Stmt::FlowAssign {
+                name: "x".into(),
+                op: FlowOp::Assign,
+                expr: Expr::Lit(Val::Nat(10)),
+            },
+            Stmt::FlowAssign {
+                name: "x".into(),
+                op: FlowOp::Inflow,
+                expr: Expr::Lit(Val::Nat(5)),
+            },
+        ]);
+        exec_stmt(&mut state, &stmt, &instances, &func_map);
+        assert_eq!(state.get_var("x"), SVal::Real(15.0)); // 10 + 5
+    }
+
+    #[test]
+    fn exec_compound_transition_emits_label() {
+        let func_map = FlowFuncMap::new();
+        let instances = InstanceMap::new();
+        let mut state = FaultState {
+            env: HashMap::new(),
+            round: 0,
+            comp_state: HashMap::new(),
+            history: HashMap::new(),
+        };
+
+        let labels = exec_stmt(
+            &mut state,
+            &Stmt::CompoundTransition(Expr::Var("a".into())),
+            &instances,
+            &func_map,
+        );
+        assert_eq!(labels, vec!["compound_transition"]);
+    }
+
+    #[test]
+    fn exec_choose_transition_emits_label() {
+        let func_map = FlowFuncMap::new();
+        let instances = InstanceMap::new();
+        let mut state = FaultState {
+            env: HashMap::new(),
+            round: 0,
+            comp_state: HashMap::new(),
+            history: HashMap::new(),
+        };
+
+        let labels = exec_stmt(
+            &mut state,
+            &Stmt::ChooseTransition(Expr::Var("x".into())),
+            &instances,
+            &func_map,
+        );
+        assert_eq!(labels, vec!["compound_transition"]);
+    }
+
+    #[test]
+    fn exec_call_unknown_function_is_noop() {
+        let func_map = FlowFuncMap::new();
+        let instances = InstanceMap::new();
+        let mut state = FaultState {
+            env: HashMap::from([("x".into(), SVal::Real(1.0))]),
+            round: 0,
+            comp_state: HashMap::new(),
+            history: HashMap::new(),
+        };
+
+        let labels = exec_stmt(
+            &mut state,
+            &Stmt::Call("unknown.fn".into()),
+            &instances,
+            &func_map,
+        );
+        assert!(labels.is_empty());
+        assert_eq!(state.get_var("x"), SVal::Real(1.0)); // unchanged
+    }
+
+    #[test]
+    fn exec_call_no_dot_is_noop() {
+        let func_map = FlowFuncMap::new();
+        let instances = InstanceMap::new();
+        let mut state = FaultState {
+            env: HashMap::new(),
+            round: 0,
+            comp_state: HashMap::new(),
+            history: HashMap::new(),
+        };
+
+        let labels = exec_stmt(
+            &mut state,
+            &Stmt::Call("nodot".into()),
+            &instances,
+            &func_map,
+        );
+        assert!(labels.is_empty());
+    }
+
+    #[test]
+    fn exec_multiple_rounds() {
+        let func_map = FlowFuncMap::new();
+        let instances = InstanceMap::new();
+        let mut state = FaultState {
+            env: HashMap::from([("x".into(), SVal::Real(0.0))]),
+            round: 0,
+            comp_state: HashMap::new(),
+            history: HashMap::new(),
+        };
+
+        let run_block = vec![Stmt::FlowAssign {
+            name: "x".into(),
+            op: FlowOp::Inflow,
+            expr: Expr::Lit(Val::Nat(1)),
+        }];
+        let var_names = vec!["x".into()];
+
+        let labels = exec_rounds(&mut state, 3, &run_block, &var_names, &instances, &func_map);
+        assert_eq!(state.get_var("x"), SVal::Real(3.0));
+        assert_eq!(state.round, 3);
+        assert!(labels.iter().filter(|l| l.starts_with("round:")).count() == 3);
+    }
+
+    #[test]
+    fn exec_components_runs_active_state() {
+        let func_map = FlowFuncMap::new();
+        let instances = InstanceMap::new();
+        let mut state = FaultState {
+            env: HashMap::from([("x".into(), SVal::Real(0.0))]),
+            round: 0,
+            comp_state: HashMap::from([("comp1".into(), "running".into())]),
+            history: HashMap::new(),
+        };
+
+        let components = vec![CompDef {
+            name: "comp1".into(),
+            states: vec![
+                (
+                    "idle".into(),
+                    vec![Stmt::FlowAssign {
+                        name: "x".into(),
+                        op: FlowOp::Assign,
+                        expr: Expr::Lit(Val::Nat(0)),
+                    }],
+                ),
+                (
+                    "running".into(),
+                    vec![Stmt::FlowAssign {
+                        name: "x".into(),
+                        op: FlowOp::Assign,
+                        expr: Expr::Lit(Val::Nat(42)),
+                    }],
+                ),
+            ],
+        }];
+
+        exec_components(&mut state, &components, &instances, &func_map);
+        assert_eq!(state.get_var("x"), SVal::Real(42.0));
+    }
+
+    #[test]
+    fn exec_components_unknown_state_is_noop() {
+        let func_map = FlowFuncMap::new();
+        let instances = InstanceMap::new();
+        let mut state = FaultState {
+            env: HashMap::from([("x".into(), SVal::Real(5.0))]),
+            round: 0,
+            comp_state: HashMap::from([("comp1".into(), "nonexistent".into())]),
+            history: HashMap::new(),
+        };
+
+        let components = vec![CompDef {
+            name: "comp1".into(),
+            states: vec![(
+                "idle".into(),
+                vec![Stmt::FlowAssign {
+                    name: "x".into(),
+                    op: FlowOp::Assign,
+                    expr: Expr::Lit(Val::Nat(99)),
+                }],
+            )],
+        }];
+
+        exec_components(&mut state, &components, &instances, &func_map);
+        assert_eq!(state.get_var("x"), SVal::Real(5.0)); // unchanged
+    }
+
+    #[test]
+    fn exec_init_block_non_assign_stmt() {
+        let func_map = FlowFuncMap::new();
+        let mut instances = InstanceMap::new();
+        let mut state = FaultState {
+            env: HashMap::new(),
+            round: 0,
+            comp_state: HashMap::new(),
+            history: HashMap::new(),
+        };
+
+        // Init block with a Stay stmt (not a FlowAssign)
+        let init_block = vec![Stmt::Stay];
+        exec_init_block(&mut state, &init_block, &mut instances, &func_map);
+        assert!(instances.is_empty());
+    }
 }

@@ -213,3 +213,123 @@ fn fixture_renamed_import() {
 fn fixture_circle_import() {
     check_import_fixture("circle_import1.fspec", "circle_import.smt2");
 }
+
+// ── Swap fixtures (M33e: target swap coverage) ─────────────────────
+// These exercise the init-block target swap and property override paths
+// in build_mappings / build_qualified_vars.
+
+fn check_swap_fixture(fspec_name: &str, smt2_name: &str) {
+    let swaps_dir = fixture_dir().join("swaps");
+    let input = fs::read_to_string(swaps_dir.join(fspec_name))
+        .unwrap_or_else(|_| panic!("Missing swaps/{}", fspec_name));
+    let expected = fs::read_to_string(swaps_dir.join(smt2_name))
+        .unwrap_or_else(|_| panic!("Missing swaps/{}", smt2_name));
+
+    let spec =
+        parse_spec(&input).unwrap_or_else(|e| panic!("{}: parse failed: {:?}", fspec_name, e));
+    let spec_name = spec.name.clone();
+    let resolved = resolve_spec(spec);
+    let actual = encode_program(&resolved, &spec_name);
+
+    let (act_decls, act_asserts) = normalize(&actual);
+    let (exp_decls, exp_asserts) = normalize(&expected);
+
+    let mut act_d: Vec<String> = act_decls.iter().map(|s| strip_ws(s)).collect();
+    act_d.sort();
+    let mut exp_d: Vec<String> = exp_decls.iter().map(|s| strip_ws(s)).collect();
+    exp_d.sort();
+    assert_eq!(
+        act_d, exp_d,
+        "swaps/{}: declaration mismatch\nactual:\n{}\nexpected:\n{}",
+        fspec_name, actual, expected
+    );
+
+    let mut act_a: Vec<String> = act_asserts.iter().map(|s| strip_ws(s)).collect();
+    act_a.sort();
+    let mut exp_a: Vec<String> = exp_asserts.iter().map(|s| strip_ws(s)).collect();
+    exp_a.sort();
+    assert_eq!(
+        act_a, exp_a,
+        "swaps/{}: assertion mismatch\nactual:\n{}\nexpected:\n{}",
+        fspec_name, actual, expected
+    );
+}
+
+#[test]
+fn fixture_swaps() {
+    check_swap_fixture("swaps.fspec", "swaps.smt2");
+}
+
+#[test]
+fn fixture_swaps1() {
+    check_swap_fixture("swaps1.fspec", "swaps1.smt2");
+}
+
+#[test]
+fn fixture_swaps2() {
+    check_swap_fixture("swaps2.fspec", "swaps2.smt2");
+}
+
+// ── Conditional fixtures (M33e: encode coverage) ───────────────────
+// Exercises if/else encoding paths. Structural verification only (Rust
+// uses different block numbering than the Go oracle files).
+
+fn check_conditional_structural(fspec_name: &str) {
+    let cond_dir = fixture_dir().join("conditionals");
+    let input = fs::read_to_string(cond_dir.join(fspec_name))
+        .unwrap_or_else(|_| panic!("Missing conditionals/{}", fspec_name));
+
+    let spec =
+        parse_spec(&input).unwrap_or_else(|e| panic!("{}: parse failed: {:?}", fspec_name, e));
+    let spec_name = spec.name.clone();
+    let resolved = resolve_spec(spec);
+    let actual = encode_program(&resolved, &spec_name);
+
+    let (decls, asserts) = normalize(&actual);
+    assert!(!decls.is_empty(), "{}: no declarations", fspec_name);
+    assert!(!asserts.is_empty(), "{}: no assertions", fspec_name);
+    assert!(
+        decls.iter().any(|d| d.contains("QF_NRA")),
+        "{}: missing set-logic",
+        fspec_name
+    );
+    // Conditional encoding should produce ite assertions
+    assert!(
+        asserts.iter().any(|a| a.contains("ite")),
+        "{}: no ite assertions for conditional spec",
+        fspec_name
+    );
+    // Determinism check
+    let actual2 = encode_program(&resolve_spec(parse_spec(&input).unwrap()), &spec_name);
+    assert_eq!(actual, actual2, "{}: non-deterministic output", fspec_name);
+}
+
+#[test]
+fn fixture_conditionals_with_else() {
+    check_conditional_structural("condwelse.fspec");
+}
+
+#[test]
+fn fixture_conditionals_multicond() {
+    check_conditional_structural("multicond.fspec");
+}
+
+#[test]
+fn fixture_conditionals_multicond2() {
+    check_conditional_structural("multicond2.fspec");
+}
+
+#[test]
+fn fixture_conditionals_multicond3() {
+    check_conditional_structural("multicond3.fspec");
+}
+
+#[test]
+fn fixture_conditionals_multicond4() {
+    check_conditional_structural("multicond4.fspec");
+}
+
+#[test]
+fn fixture_conditionals_multicond5() {
+    check_conditional_structural("multicond5.fspec");
+}

@@ -99,3 +99,100 @@ pub fn load_system_imports(sys: &mut System, base_dir: &Path) {
     sys.imports = loaded;
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_temp_spec(dir: &Path, name: &str, content: &str) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn load_imports_missing_file_continues() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut spec = parse_spec("spec main;").unwrap();
+        spec.import_decls.push(fault_syntax::ImportDecl {
+            path: "nonexistent.fspec".into(),
+            alias: "nonexistent".into(),
+        });
+        // Should not panic; missing import is a warning
+        load_imports(&mut spec, dir.path());
+        assert!(spec.imported_specs.is_empty());
+    }
+
+    #[test]
+    fn load_imports_parse_error_continues() {
+        let dir = tempfile::tempdir().unwrap();
+        write_temp_spec(dir.path(), "bad.fspec", "this is not valid fault");
+        let mut spec = parse_spec("spec main;").unwrap();
+        spec.import_decls.push(fault_syntax::ImportDecl {
+            path: "bad.fspec".into(),
+            alias: "bad".into(),
+        });
+        load_imports(&mut spec, dir.path());
+        assert!(spec.imported_specs.is_empty());
+    }
+
+    #[test]
+    fn load_imports_valid_file_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        write_temp_spec(
+            dir.path(),
+            "other.fspec",
+            "spec other;\nconst x = 5;",
+        );
+        let mut spec = parse_spec("spec main;").unwrap();
+        spec.import_decls.push(fault_syntax::ImportDecl {
+            path: "other.fspec".into(),
+            alias: "other".into(),
+        });
+        load_imports(&mut spec, dir.path());
+        assert_eq!(spec.imported_specs.len(), 1);
+        assert_eq!(spec.imported_specs[0].name, "other");
+    }
+
+    #[test]
+    fn load_imports_circular_import_breaks_cycle() {
+        let dir = tempfile::tempdir().unwrap();
+        // a.fspec imports b.fspec, b.fspec imports a.fspec
+        write_temp_spec(
+            dir.path(),
+            "a.fspec",
+            "spec a;\nimport \"b.fspec\";\nconst x = 1;",
+        );
+        write_temp_spec(
+            dir.path(),
+            "b.fspec",
+            "spec b;\nimport \"a.fspec\";\nconst y = 2;",
+        );
+        let src = fs::read_to_string(dir.path().join("a.fspec")).unwrap();
+        let mut spec = parse_spec(&src).unwrap();
+        load_imports(&mut spec, dir.path());
+        // Should have imported b, but b's recursive import of a is a stub
+        assert_eq!(spec.imported_specs.len(), 1);
+        assert_eq!(spec.imported_specs[0].name, "b");
+    }
+
+    #[test]
+    fn load_system_imports_missing_file_continues() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sys = fault_syntax::System {
+            name: "test_sys".into(),
+            import_decls: vec![fault_syntax::ImportDecl {
+                path: "missing.fspec".into(),
+                alias: "missing".into(),
+            }],
+            imports: vec![],
+            globals: vec![],
+            components: vec![],
+            invariants: vec![],
+            start_states: vec![],
+            run_block: None,
+        };
+        load_system_imports(&mut sys, dir.path());
+        assert!(sys.imports.is_empty());
+    }
+}

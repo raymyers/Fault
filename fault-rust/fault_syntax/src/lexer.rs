@@ -792,4 +792,141 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn unterminated_string_error() {
+        let err = Lexer::new(r#""hello"#).tokenize().unwrap_err();
+        assert!(err.msg.contains("unterminated string"));
+        assert_eq!(err.line, 1);
+    }
+
+    #[test]
+    fn unterminated_raw_string_error() {
+        let err = Lexer::new("`hello").tokenize().unwrap_err();
+        assert!(err.msg.contains("unterminated raw string"));
+    }
+
+    #[test]
+    fn unexpected_character_error() {
+        let err = Lexer::new("x ~ y").tokenize().unwrap_err();
+        assert!(err.msg.contains("unexpected character"));
+    }
+
+    #[test]
+    fn string_with_escape() {
+        let toks = Lexer::new(r#""he\"llo""#).tokenize().unwrap();
+        assert_eq!(toks[0].kind, TokenKind::StringLit);
+        assert_eq!(toks[0].text, r#"he\"llo"#);
+    }
+
+    #[test]
+    fn block_comment_at_eof() {
+        // Unterminated block comment should not panic, just reach EOF
+        let toks = Lexer::new("x /* unterminated").tokenize().unwrap();
+        let ks: Vec<_> = toks.iter().map(|t| t.kind).collect();
+        assert_eq!(ks, vec![TokenKind::Ident, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn lex_error_display() {
+        let err = LexError {
+            line: 5,
+            col: 10,
+            msg: "bad token".into(),
+        };
+        assert_eq!(format!("{}", err), "5:10: bad token");
+    }
+
+    #[test]
+    fn token_kind_display() {
+        assert_eq!(format!("{}", TokenKind::Spec), "Spec");
+        assert_eq!(format!("{}", TokenKind::Eof), "Eof");
+    }
+
+    #[test]
+    fn increment_decrement_ops() {
+        assert_eq!(
+            kinds("a++ b--"),
+            vec![
+                TokenKind::Ident,
+                TokenKind::PlusPlus,
+                TokenKind::Ident,
+                TokenKind::MinusMinus,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn bitwise_ops() {
+        assert_eq!(
+            kinds("a & b ^ c ! d"),
+            vec![
+                TokenKind::Ident,
+                TokenKind::Amp,
+                TokenKind::Ident,
+                TokenKind::Caret,
+                TokenKind::Ident,
+                TokenKind::Bang,
+                TokenKind::Ident,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn shift_ops() {
+        assert_eq!(
+            kinds("a << b >> c"),
+            vec![
+                TokenKind::Ident,
+                TokenKind::Lshift,
+                TokenKind::Ident,
+                TokenKind::Rshift,
+                TokenKind::Ident,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn scientific_notation() {
+        let toks = Lexer::new("1e5 2E-3 3.14e+2").tokenize().unwrap();
+        assert_eq!(toks[0].kind, TokenKind::FloatLit);
+        assert_eq!(toks[1].kind, TokenKind::FloatLit);
+        assert_eq!(toks[2].kind, TokenKind::FloatLit);
+    }
+
+    #[test]
+    fn underscore_identifier() {
+        let toks = Lexer::new("_foo _bar_baz __x").tokenize().unwrap();
+        assert_eq!(toks[0].kind, TokenKind::Ident);
+        assert_eq!(toks[0].text, "_foo");
+        assert_eq!(toks[1].kind, TokenKind::Ident);
+        assert_eq!(toks[2].kind, TokenKind::Ident);
+    }
+
+    #[test]
+    fn brackets_and_parens() {
+        assert_eq!(
+            kinds("( ) [ ] { }"),
+            vec![
+                TokenKind::LParen,
+                TokenKind::RParen,
+                TokenKind::LBracket,
+                TokenKind::RBracket,
+                TokenKind::LBrace,
+                TokenKind::RBrace,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn multiline_position_tracking() {
+        let toks = Lexer::new("x\ny\nz").tokenize().unwrap();
+        assert_eq!(toks[0].line, 1);
+        assert_eq!(toks[1].line, 2);
+        assert_eq!(toks[2].line, 3);
+    }
 }

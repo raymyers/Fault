@@ -2926,4 +2926,87 @@ for 2 init{ gee = new bar; } run { gee.fizz; };"#;
             &"(assert (= indexes_gee_bash_a_2 (+ indexes_gee_bash_a_1 (- indexes_gee_bash_a_0 2.0))))".into()
         ));
     }
+
+    #[test]
+    fn e2e_assert_always_negated() {
+        // `assert x == 10` over 2 rounds → negated: OR of (not (= x_r 10))
+        let src = r#"spec inv;
+def s = stock{ x: 10 };
+def f = flow{ d: new s, fn: func{ d.x <- 1; } };
+assert s.x == 10;
+for 2 init{ a = new f; } run { a.fn; }"#;
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        // The assert is negated (for counterexample search): should see `or` of `not`
+        assert!(smt.contains("(not (= inv_a_d_x_"));
+        assert!(smt.contains("(or "));
+    }
+
+    #[test]
+    fn e2e_assume_not_negated() {
+        // `assume x > 2` → not negated, should be conjunctive (and)
+        let src = r#"spec inv2;
+def s = stock{ x: 40 };
+def f = flow{ d: new s, fn: func{ d.x -> d.x / 2; } };
+assume s.x > 2;
+for 2 init{ a = new f; } run { a.fn; }"#;
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        // The assume is not negated: should see `and` of `(> x_r 2.0)`
+        assert!(smt.contains("(> inv2_a_d_x_"));
+        assert!(smt.contains("(and "));
+    }
+
+    #[test]
+    fn e2e_assert_eventually_negated() {
+        // `assert x == 0 eventually` → negated: AND of (not (= x_r 0.0))
+        let src = r#"spec inv3;
+def s = stock{ x: 10 };
+def f = flow{ d: new s, fn: func{ d.x -> d.x / 2; } };
+assert s.x == 0 eventually;
+for 2 init{ a = new f; } run { a.fn; }"#;
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        // Negated eventually: AND of NOT
+        assert!(smt.contains("(not (= inv3_a_d_x_"));
+        // Must be (and ...) for negated eventually
+        let lines = normalize_smt(&smt);
+        let negated = lines.iter().find(|l| l.contains("(not (= inv3_a_d_x_"));
+        assert!(negated.is_some());
+    }
+
+    #[test]
+    fn e2e_const_bool_encoding() {
+        // Bool constants are declared as Bool sort (free variables for string propositions)
+        let src = r#"spec boolspec;
+const flag = true;
+const off = false;"#;
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        assert!(smt.contains("(declare-fun boolspec_flag_0 () Bool)"));
+        assert!(smt.contains("(declare-fun boolspec_off_0 () Bool)"));
+    }
+
+    #[test]
+    fn e2e_when_then_assert() {
+        let src = r#"spec wt;
+def s = stock{ x: 10 };
+def f = flow{ d: new s, fn: func{ d.x -> 1; } };
+assert when s.x > 5 then s.x < 20;
+for 2 init{ a = new f; } run { a.fn; }"#;
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
+        let name = spec.name.clone();
+        let resolved = fault_resolve::resolve_spec(spec);
+        let smt = encode_program(&resolved, &name);
+        // when...then produces implication: (=> guard body)
+        assert!(smt.contains("(=> (>"));
+    }
 }

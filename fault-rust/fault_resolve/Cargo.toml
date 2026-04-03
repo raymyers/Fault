@@ -6,5 +6,8 @@ edition = "2024"
 [dependencies]
 fault_syntax = { path = "../fault_syntax" }
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

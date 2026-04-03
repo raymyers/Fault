@@ -4,7 +4,7 @@ Improve correctness confidence, maintainability, and test quality of the Rust im
 Informed by branch coverage (84.8% baseline), mutation testing, Clippy analysis, and
 [rust-skills](https://github.com/leonardomso/rust-skills) rules.
 
-**Status (2026-04-03):** 191 tests pass. All 8 external examples correct.
+**Status (2026-04-03):** 257 tests pass. All 8 external examples correct.
 Clippy: 0 warnings (clean). Workspace lints enforced.
 
 ---
@@ -55,15 +55,18 @@ Priority ordered by risk (lowest coverage × highest criticality):
   to `lib.rs`. Added 7 tests (smt, parse, check modes, error paths, imports, booleans).
 - [x] **33b. fault_syntax/parser.rs (80.2%)** — Added 6 parser error-path tests (empty file,
   missing semi, bad token, incomplete def, missing spec name, fixture dir).
-- [ ] **33c. fault_exec/lib.rs (84.3%)** — Cover untested execution paths: nested if-else in
-  exec, parallel with errors, unknown function calls.
-- [ ] **33d. fault_resolve/loader.rs (77.4%)** — Test missing-file error path, circular import
-  detection, relative path resolution edge cases.
-- [ ] **33e. fault_smt/encode.rs (85.9%)** — Cover uncovered branches: target swaps (line 120),
-  property overrides (line 130), const bool encoding (line 274), mixed-system
-  run-if paths. Add fixture `.fspec` files that exercise these.
-- [ ] **33f. fault_syntax/lexer.rs (85.3%)** — Test error recovery: unterminated strings,
-  invalid number literals, unexpected characters.
+- [x] **33c. fault_exec/lib.rs (84.3%)** — Added 12 tests: nil condition branch, Advance/Stay/Seq
+  stmt, CompoundTransition/ChooseTransition, unknown function calls, call-no-dot,
+  multi-round, component state matching, unknown component state, init non-assign.
+- [x] **33d. fault_resolve/loader.rs (77.4%)** — Added 5 loader tests: missing file, parse error,
+  valid import, circular import cycle breaking, system import missing file.
+- [x] **33e. fault_smt/encode.rs (85.9%)** — Added 9 fixture tests: 3 swap oracle (swaps,
+  swaps1, swaps2) exercising target swaps and property overrides; 6 conditional
+  structural tests (condwelse, multicond1-5) exercising if/else encoding paths.
+- [x] **33f. fault_syntax/lexer.rs (85.3%)** — Added 14 lexer tests: unterminated string,
+  unterminated raw string, unexpected character, string escape, block comment EOF,
+  error display, token kind display, increment/decrement, bitwise, shift ops,
+  scientific notation, underscore idents, brackets/parens, multiline position tracking.
 
 ---
 
@@ -76,9 +79,9 @@ that kill them. Focus on modules where a surviving mutation would produce wrong 
   merge_max both directions, current_ro immutability, has-after-bump, set_version, bump returns.
 - [x] **34b. fault_resolve/validate.rs** — Added 4 badspec fixture tests: flowsnorun,
   stocksnorun, emptyspec (all MissingRunBlock), constsonly (valid).
-- [ ] **34c. fault_smt/encode.rs (targeted)** — run mutants on `encode_invariants`,
-  `encode_temporal`, `encode_expr_at_round` (critical for correctness). Add assertion-heavy
-  fixture tests.
+- [x] **34c. fault_smt/encode.rs (targeted)** — Added 5 assertion-heavy e2e tests:
+  assert-always-negated (OR of NOT), assume-not-negated (AND), eventually-negated,
+  const-bool-encoding (Bool sort declaration), when-then-assert (implication).
 - [ ] **34d. fault_smt/statechart.rs (targeted)** — run mutants on `qname` (cross-component
   fix), `encode_advance_and_body`, `encode_advance_or_body`. Verify that the
   cross-component advance fix is mutation-tested.
