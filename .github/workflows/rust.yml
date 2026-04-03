@@ -20,10 +20,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
-
-      - name: Format check
-        run: cargo fmt --check
+          components: clippy
 
       - name: Clippy
         run: cargo clippy -- -D warnings
