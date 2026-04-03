@@ -184,7 +184,23 @@ fn run_parse_mode(src: &str, file_path: &str) {
 fn run_check_mode(src: &str, _spec_name: &str, base_dir: &Path, file_path: &str) {
     let input = parse_and_validate(src, base_dir, file_path);
     let (resolved, name) = resolve_input(input);
+
+    // Check if there are any assertions to verify
+    let has_assertions = resolved.invariants.iter().any(|inv| {
+        matches!(
+            inv,
+            fault_syntax::Invariant::Assert { .. }
+                | fault_syntax::Invariant::AssertWhen { .. }
+        )
+    });
+
     let smt = fault_smt::encode_program(&resolved, &name);
+
+    if !has_assertions {
+        println!("Fault could not find a failure case.");
+        println!("(no assertions to check)");
+        return;
+    }
 
     // Try to shell out to Z3
     let z3_cmd = std::env::var("SOLVERCMD").unwrap_or_else(|_| "z3".into());
