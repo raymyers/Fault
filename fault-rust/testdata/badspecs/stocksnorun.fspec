@@ -1,0 +1,5 @@
+spec stocksnorun;
+
+def s = stock{
+    v: 10,
+};

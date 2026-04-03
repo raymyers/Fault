@@ -70,7 +70,7 @@ fn simple_spec() -> Spec {
 fn val_json_roundtrip() {
     let vals = vec![
         Val::Nat(42),
-        Val::Float(3.14),
+        Val::Float(3.125),
         Val::Bool(true),
         Val::Str("hello".into()),
         Val::Unknown,

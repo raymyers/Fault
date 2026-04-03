@@ -105,10 +105,10 @@ fn sort_commutative(sexpr: &SExpr) -> SExpr {
         SExpr::Atom(a) => SExpr::Atom(a.clone()),
         SExpr::List(children) => {
             let sorted_children: Vec<SExpr> =
-                children.iter().map(|c| sort_commutative(c)).collect();
+                children.iter().map(sort_commutative).collect();
             // Sort children of commutative operators (and, or)
-            if let Some(SExpr::Atom(op)) = sorted_children.first() {
-                if op == "and" || op == "or" {
+            if let Some(SExpr::Atom(op)) = sorted_children.first()
+                && (op == "and" || op == "or") {
                     let mut args: Vec<SExpr> =
                         sorted_children[1..].to_vec();
                     args.sort();
@@ -116,7 +116,6 @@ fn sort_commutative(sexpr: &SExpr) -> SExpr {
                     result.extend(args);
                     return SExpr::List(result);
                 }
-            }
             SExpr::List(sorted_children)
         }
     }

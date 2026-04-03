@@ -6,3 +6,6 @@ edition = "2024"
 [dependencies]
 fault_syntax = { path = "../fault_syntax" }
 fault_resolve = { path = "../fault_resolve" }
+
+[lints]
+workspace = true

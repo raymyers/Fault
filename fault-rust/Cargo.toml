@@ -9,3 +9,9 @@ members = [
     "fault_cli",
 ]
 resolver = "2"
+
+[workspace.lints.clippy]
+correctness = "deny"
+suspicious = "warn"
+perf = "warn"
+style = "warn"

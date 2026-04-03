@@ -6,14 +6,15 @@
 //!   fault-rust -m parse -f input.fspec  # parse and dump AST (debug)
 
 use std::fs;
-use std::path::Path;
 use std::process;
+
+use fault_cli::Mode;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     let mut file_path: Option<&str> = None;
-    let mut mode = "check";
+    let mut mode_str = "check";
 
     let mut i = 1;
     while i < args.len() {
@@ -24,7 +25,7 @@ fn main() {
             }
             "-m" => {
                 i += 1;
-                mode = match args.get(i) {
+                mode_str = match args.get(i) {
                     Some(m) => m.as_str(),
                     None => {
                         eprintln!("error: -m requires a mode (smt, parse, check)");
@@ -54,6 +55,16 @@ fn main() {
         }
     };
 
+    let mode = match mode_str {
+        "smt" => Mode::Smt,
+        "parse" => Mode::Parse,
+        "check" => Mode::Check,
+        other => {
+            eprintln!("error: unknown mode '{}' (use smt, parse, or check)", other);
+            process::exit(1);
+        }
+    };
+
     let src = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -62,28 +73,10 @@ fn main() {
         }
     };
 
-    // Extract spec name from file (fallback), will be overridden by parsed spec name
-    let file_spec_name = Path::new(path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("spec")
-        .to_string();
-    let spec_name = file_spec_name.as_str();
-
-    let base_dir = Path::new(path)
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
-
-    match mode {
-        "smt" => run_smt_mode(&src, spec_name, &base_dir, path),
-        "parse" => run_parse_mode(&src, path),
-        "check" => run_check_mode(&src, spec_name, &base_dir, path),
-        other => {
-            eprintln!("error: unknown mode '{}' (use smt, parse, or check)", other);
-            process::exit(1);
-        }
-    }
+    let output = fault_cli::run(mode, &src, path);
+    print!("{}", output.stdout);
+    eprint!("{}", output.stderr);
+    process::exit(output.exit_code);
 }
 
 fn print_usage() {
@@ -92,174 +85,4 @@ fn print_usage() {
     eprintln!("  smt    Emit SMT-LIB2 encoding");
     eprintln!("  parse  Parse and dump AST (debug)");
     eprintln!("  check  Check model with Z3 solver (default)");
-}
-
-enum ParsedInput {
-    Spec(fault_syntax::Spec),
-    System(fault_syntax::System),
-}
-
-fn parse_and_validate(src: &str, base_dir: &Path, file_path: &str) -> ParsedInput {
-    let is_system = file_path.ends_with(".fsystem");
-
-    if is_system {
-        let mut sys = match fault_syntax::parser::parse_system(src) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("parse error: {}", e);
-                process::exit(1);
-            }
-        };
-        fault_resolve::loader::load_system_imports(&mut sys, base_dir);
-        ParsedInput::System(sys)
-    } else {
-        let mut spec = match fault_syntax::parser::parse_spec(src) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("parse error: {}", e);
-                process::exit(1);
-            }
-        };
-
-        if !spec.import_decls.is_empty() {
-            fault_resolve::loader::load_imports(&mut spec, base_dir);
-        }
-
-        let errors = fault_resolve::validate::validate_spec(&spec);
-        if !errors.is_empty() {
-            for e in &errors {
-                eprintln!("{}", e);
-            }
-            process::exit(1);
-        }
-
-        ParsedInput::Spec(spec)
-    }
-}
-
-fn resolve_input(input: ParsedInput) -> (fault_resolve::ResolvedProgram, String) {
-    match input {
-        ParsedInput::Spec(spec) => {
-            let name = spec.name.clone();
-            let resolved = fault_resolve::resolve_spec(spec);
-            (resolved, name)
-        }
-        ParsedInput::System(sys) => {
-            let name = sys.name.clone();
-            let resolved = fault_resolve::resolve_system(sys);
-            (resolved, name)
-        }
-    }
-}
-
-fn run_smt_mode(src: &str, _spec_name: &str, base_dir: &Path, file_path: &str) {
-    let input = parse_and_validate(src, base_dir, file_path);
-    let (resolved, name) = resolve_input(input);
-    let smt = fault_smt::encode_program(&resolved, &name);
-    print!("{}", smt);
-}
-
-fn run_parse_mode(src: &str, file_path: &str) {
-    if file_path.ends_with(".fsystem") {
-        let sys = match fault_syntax::parser::parse_system(src) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("parse error: {}", e);
-                process::exit(1);
-            }
-        };
-        println!("{:#?}", sys);
-    } else {
-        let spec = match fault_syntax::parser::parse_spec(src) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("parse error: {}", e);
-                process::exit(1);
-            }
-        };
-        println!("{:#?}", spec);
-    }
-}
-
-fn run_check_mode(src: &str, _spec_name: &str, base_dir: &Path, file_path: &str) {
-    let input = parse_and_validate(src, base_dir, file_path);
-    let (resolved, name) = resolve_input(input);
-
-    // Check if there are any assertions to verify
-    let has_assertions = resolved.invariants.iter().any(|inv| {
-        matches!(
-            inv,
-            fault_syntax::Invariant::Assert { .. }
-                | fault_syntax::Invariant::AssertWhen { .. }
-        )
-    });
-
-    let smt = fault_smt::encode_program(&resolved, &name);
-
-    if !has_assertions {
-        println!("Fault could not find a failure case.");
-        println!("(no assertions to check)");
-        return;
-    }
-
-    // Try to shell out to Z3
-    let z3_cmd = std::env::var("SOLVERCMD").unwrap_or_else(|_| "z3".into());
-    let z3_arg = std::env::var("SOLVERARG").unwrap_or_else(|_| "-in".into());
-
-    let smt_with_check = format!("{}\n(check-sat)\n(get-model)\n", smt);
-
-    match std::process::Command::new(&z3_cmd)
-        .arg(&z3_arg)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-    {
-        Ok(mut child) => {
-            use std::io::Write;
-            if let Some(ref mut stdin) = child.stdin {
-                let _ = stdin.write_all(smt_with_check.as_bytes());
-            }
-
-            match child.wait_with_output() {
-                Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let lines: Vec<&str> = stdout.lines().collect();
-
-                    if let Some(result_line) = lines.first() {
-                        match *result_line {
-                            "sat" => {
-                                println!("COUNTEREXAMPLE FOUND (assertion violated)");
-                                for line in &lines[1..] {
-                                    println!("{}", line);
-                                }
-                            }
-                            "unsat" => {
-                                println!("CORRECT (no counterexample found)");
-                            }
-                            "unknown" => {
-                                println!("UNKNOWN (solver could not determine)");
-                            }
-                            other => {
-                                eprintln!("unexpected solver output: {}", other);
-                                process::exit(1);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("error waiting for solver: {}", e);
-                    process::exit(1);
-                }
-            }
-        }
-        Err(_) => {
-            eprintln!(
-                "warning: solver '{}' not found; printing SMT encoding instead",
-                z3_cmd
-            );
-            eprintln!("(install Z3 or set SOLVERCMD environment variable)");
-            print!("{}", smt);
-        }
-    }
 }

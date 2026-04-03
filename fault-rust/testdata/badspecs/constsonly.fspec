@@ -1,0 +1,4 @@
+spec constsonly;
+
+const x = 42;
+const y = 3.5;

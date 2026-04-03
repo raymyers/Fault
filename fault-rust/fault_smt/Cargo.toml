@@ -9,3 +9,6 @@ fault_resolve = { path = "../fault_resolve" }
 fault_eval = { path = "../fault_eval" }
 fault_exec = { path = "../fault_exec" }
 fault_temporal = { path = "../fault_temporal" }
+
+[lints]
+workspace = true

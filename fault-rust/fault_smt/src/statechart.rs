@@ -13,6 +13,12 @@
 use fault_syntax::{CompDef, Stmt, Expr, BinOp};
 use std::collections::BTreeMap;
 
+/// Extract the advance target from a name like `__advance_this.X` or `__advance_X`.
+fn parse_advance_target(name: &str) -> &str {
+    let without_prefix = name.strip_prefix("__advance_").unwrap_or(name);
+    without_prefix.strip_prefix("this.").unwrap_or(without_prefix)
+}
+
 /// Tracks SSA versions and emitted declarations for state variables.
 pub struct StateChartEncoder {
     spec_name: String,
@@ -913,12 +919,7 @@ fn analyze_expr(expr: &Expr) -> Transition {
             }
         }
         Expr::Var(name) if name.starts_with("__advance_") => {
-            let target = name
-                .strip_prefix("__advance_")
-                .unwrap()
-                .strip_prefix("this.")
-                .unwrap_or(name.strip_prefix("__advance_").unwrap())
-                .to_string();
+            let target = parse_advance_target(name).to_string();
             Transition::AdvanceAnd(vec![target])
         }
         Expr::Var(name) if name == "__stay" => Transition::Stay,
@@ -948,12 +949,7 @@ fn collect_and_targets(expr: &Expr, targets: &mut Vec<String>) {
             collect_and_targets(right, targets);
         }
         Expr::Var(name) if name.starts_with("__advance_") => {
-            let target = name
-                .strip_prefix("__advance_")
-                .unwrap()
-                .strip_prefix("this.")
-                .unwrap_or(name.strip_prefix("__advance_").unwrap())
-                .to_string();
+            let target = parse_advance_target(name).to_string();
             targets.push(target);
         }
         _ => {}
@@ -971,12 +967,7 @@ fn collect_or_targets(expr: &Expr, targets: &mut Vec<String>) {
             collect_or_targets(right, targets);
         }
         Expr::Var(name) if name.starts_with("__advance_") => {
-            let target = name
-                .strip_prefix("__advance_")
-                .unwrap()
-                .strip_prefix("this.")
-                .unwrap_or(name.strip_prefix("__advance_").unwrap())
-                .to_string();
+            let target = parse_advance_target(name).to_string();
             targets.push(target);
         }
         _ => {}
@@ -1010,12 +1001,7 @@ fn collect_choose_branches(expr: &Expr, branches: &mut Vec<ChooseBranch>) {
             branches.push(ChooseBranch::AdvanceAnd(targets));
         }
         Expr::Var(name) if name.starts_with("__advance_") => {
-            let target = name
-                .strip_prefix("__advance_")
-                .unwrap()
-                .strip_prefix("this.")
-                .unwrap_or(name.strip_prefix("__advance_").unwrap())
-                .to_string();
+            let target = parse_advance_target(name).to_string();
             branches.push(ChooseBranch::Advance(target));
         }
         Expr::Var(name) if name == "__stay" => {
@@ -1083,7 +1069,7 @@ fn cond_expr_to_smt(expr: &Expr) -> String {
             fault_syntax::Val::Str(s) => format!("\"{}\"", s),
             _ => format!("{:?}", val),
         },
-        _ => panic!("cond_expr_to_smt: unhandled expression variant: {:?}", expr),
+        _ => format!("; ERROR: cond_expr_to_smt: unhandled {:?}", expr),
     }
 }
 

@@ -85,3 +85,43 @@ fn badspec_sharedstate_is_valid() {
         errs
     );
 }
+
+#[test]
+fn badspec_flows_no_run_block() {
+    let errs = read_and_validate("flowsnorun.fspec");
+    assert!(
+        errs.iter().any(|e| matches!(e, FaultError::MissingRunBlock)),
+        "expected MissingRunBlock for flows without run block, got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn badspec_stocks_no_run_block() {
+    let errs = read_and_validate("stocksnorun.fspec");
+    assert!(
+        errs.iter().any(|e| matches!(e, FaultError::MissingRunBlock)),
+        "expected MissingRunBlock for stocks without run block, got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn badspec_empty_spec() {
+    let errs = read_and_validate("emptyspec.fspec");
+    assert!(
+        errs.iter().any(|e| matches!(e, FaultError::MissingRunBlock)),
+        "expected MissingRunBlock for empty spec, got: {:?}",
+        errs
+    );
+}
+
+#[test]
+fn badspec_consts_only_is_valid() {
+    let errs = read_and_validate("constsonly.fspec");
+    assert!(
+        errs.is_empty(),
+        "constants-only spec should be valid, got errors: {:?}",
+        errs
+    );
+}

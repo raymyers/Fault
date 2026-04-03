@@ -114,3 +114,56 @@ fn parse_import_fixtures() {
         }
     }
 }
+
+// --- Parser error-path tests (M33b) ---
+
+#[test]
+fn parse_error_empty_file() {
+    let src = "";
+    assert!(parser::parse_spec(src).is_err(), "empty file should fail to parse");
+}
+
+#[test]
+fn parse_error_missing_semi() {
+    let src = "spec bad\ndef s = stock{ v: 10, }";
+    assert!(parser::parse_spec(src).is_err(), "missing semicolon should fail");
+}
+
+#[test]
+fn parse_error_bad_token() {
+    let src = "spec bad;\n@@@ not valid;";
+    assert!(parser::parse_spec(src).is_err(), "invalid tokens should fail");
+}
+
+#[test]
+fn parse_error_incomplete_def() {
+    let src = "spec bad;\ndef s = ";
+    assert!(parser::parse_spec(src).is_err(), "incomplete def should fail");
+}
+
+#[test]
+fn parse_error_missing_spec_name() {
+    let src = "spec;";
+    assert!(parser::parse_spec(src).is_err(), "spec without name should fail");
+}
+
+#[test]
+fn parse_error_fixtures_all_fail() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../testdata/parse_errors");
+    if !dir.exists() {
+        return;
+    }
+    for entry in fs::read_dir(&dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.extension().map(|e| e == "fspec").unwrap_or(false) {
+            let src = fs::read_to_string(&path).unwrap();
+            let name = path.file_name().unwrap().to_string_lossy();
+            assert!(
+                parser::parse_spec(&src).is_err(),
+                "{} should fail to parse",
+                name
+            );
+        }
+    }
+}

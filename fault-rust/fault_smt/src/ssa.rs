@@ -95,4 +95,78 @@ mod tests {
         // New variable starts at 0
         assert_eq!(ssa.current_name("y"), "y_0");
     }
+
+    #[test]
+    fn snapshot_restore_roundtrip() {
+        let mut ssa = Ssa::new();
+        ssa.next_name("x"); // x_0 → x_1
+        ssa.next_name("x"); // x_1 → x_2
+        assert_eq!(ssa.current("x"), 2);
+        let snap = ssa.snapshot();
+        ssa.next_name("x"); // x_2 → x_3
+        assert_eq!(ssa.current("x"), 3);
+        ssa.restore(snap);
+        assert_eq!(ssa.current("x"), 2);
+    }
+
+    #[test]
+    fn merge_max_takes_higher() {
+        let mut ssa = Ssa::new();
+        ssa.next_name("a"); // a_1
+        ssa.next_name("a"); // a_2
+        assert_eq!(ssa.current("a"), 2);
+        let snap = ssa.snapshot(); // {a: 2}
+
+        let mut ssa2 = Ssa::new();
+        ssa2.next_name("a"); // a_1
+        assert_eq!(ssa2.current("a"), 1);
+        ssa2.merge_max(&snap);
+        assert_eq!(ssa2.current("a"), 2);
+    }
+
+    #[test]
+    fn merge_max_keeps_own_if_higher() {
+        let mut ssa = Ssa::new();
+        ssa.next_name("a"); // a_1
+        let snap = ssa.snapshot(); // {a: 1}
+
+        let mut ssa2 = Ssa::new();
+        ssa2.next_name("a");
+        ssa2.next_name("a");
+        ssa2.next_name("a"); // a_3
+        assert_eq!(ssa2.current("a"), 3);
+        ssa2.merge_max(&snap);
+        assert_eq!(ssa2.current("a"), 3);
+    }
+
+    #[test]
+    fn current_ro_does_not_bump() {
+        let ssa = Ssa::new();
+        let v = ssa.current_ro("x");
+        assert_eq!(v, 0);
+        assert!(!ssa.has("x"));
+    }
+
+    #[test]
+    fn has_after_bump() {
+        let mut ssa = Ssa::new();
+        assert!(!ssa.has("x"));
+        ssa.next_name("x");
+        assert!(ssa.has("x"));
+    }
+
+    #[test]
+    fn set_version_overrides() {
+        let mut ssa = Ssa::new();
+        ssa.set_version("y", 5);
+        assert_eq!(ssa.current("y"), 5);
+    }
+
+    #[test]
+    fn bump_returns_incremented_version() {
+        let mut ssa = Ssa::new();
+        assert_eq!(ssa.bump("z"), 1);
+        assert_eq!(ssa.bump("z"), 2);
+        assert_eq!(ssa.current("z"), 2);
+    }
 }

@@ -75,9 +75,10 @@ pub fn validate_spec(spec: &Spec) -> Vec<FaultError> {
             // Missing run block — error if there are stocks/flows that need execution.
             // Specs with only constants (possibly with expressions) are fine without a run block.
             let has_const_exprs = spec.constants.iter().any(|c| c.expr.is_some());
-            if !spec.flows.is_empty() || !spec.stocks.is_empty() {
-                errors.push(FaultError::MissingRunBlock);
-            } else if spec.invariants.is_empty() && !has_const_exprs && spec.constants.is_empty() {
+            let has_dynamics = !spec.flows.is_empty() || !spec.stocks.is_empty();
+            let has_static_content =
+                !spec.invariants.is_empty() || has_const_exprs || !spec.constants.is_empty();
+            if has_dynamics || !has_static_content {
                 errors.push(FaultError::MissingRunBlock);
             }
         }

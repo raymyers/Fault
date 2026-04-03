@@ -1,0 +1,6 @@
+spec bad
+
+def s = stock{
+    v: 10,
+}
+

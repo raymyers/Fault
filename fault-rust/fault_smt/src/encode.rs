@@ -12,6 +12,18 @@ use crate::ssa::Ssa;
 use fault_resolve::ResolvedProgram;
 use fault_syntax::*;
 
+/// Context for encoding an if-then-else inside a state function.
+struct MixedIfContext<'a> {
+    cond: &'a Expr,
+    then_branch: &'a [Stmt],
+    else_branch: &'a [Stmt],
+    prog: &'a ResolvedProgram,
+    spec_name: &'a str,
+    comp: &'a str,
+    comp_states: &'a BTreeMap<String, Vec<String>>,
+    guard_var: &'a str,
+}
+
 /// Collected SMT output: declarations and assertions.
 struct SmtWriter {
     ssa: Ssa,
@@ -1132,11 +1144,10 @@ impl SmtWriter {
                 // Use round_entries if available; constants (never assigned)
                 // always stay at version 0.
                 let ridx = round as usize;
-                if ridx < self.round_entries.len() {
-                    if let Some(ver) = self.round_entries[ridx].get(&effective) {
+                if ridx < self.round_entries.len()
+                    && let Some(ver) = self.round_entries[ridx].get(&effective) {
                         return ver.clone();
                     }
-                }
                 // Fallback: constant or untracked → version 0
                 format!("{}_0", effective)
             }
@@ -1264,9 +1275,17 @@ impl SmtWriter {
             Stmt::Call(name) => self.encode_call(name, prog),
             Stmt::FlowAssign { name, op, expr } => self.encode_flow_assign(name, *op, expr),
             Stmt::IfThenElse { cond, then_branch, else_branch } => {
-                self.encode_mixed_if_in_state(
-                    cond, then_branch, else_branch, prog, spec_name, comp, comp_states, guard_var,
-                );
+                let ctx = MixedIfContext {
+                    cond,
+                    then_branch,
+                    else_branch,
+                    prog,
+                    spec_name,
+                    comp,
+                    comp_states,
+                    guard_var,
+                };
+                self.encode_mixed_if_in_state(&ctx);
             }
             Stmt::Advance(target) => {
                 let target_name = target.strip_prefix("this.").unwrap_or(target);
@@ -1291,20 +1310,10 @@ impl SmtWriter {
     /// Pattern from Go oracle:
     /// - `if cond { fn }` → combined (state AND cond) guard
     /// - `if cond { advance } else { fn }` → fn gets state-only guard, advance gets combined
-    fn encode_mixed_if_in_state(
-        &mut self,
-        cond: &Expr,
-        then_branch: &[Stmt],
-        else_branch: &[Stmt],
-        prog: &ResolvedProgram,
-        spec_name: &str,
-        comp: &str,
-        comp_states: &BTreeMap<String, Vec<String>>,
-        guard_var: &str,
-    ) {
-        let then_has_flow = branches_have_flow(then_branch);
-        let else_has_flow = branches_have_flow(else_branch);
-        let then_has_advance = branches_have_advance(then_branch);
+    fn encode_mixed_if_in_state(&mut self, ctx: &MixedIfContext<'_>) {
+        let then_has_flow = branches_have_flow(ctx.then_branch);
+        let else_has_flow = branches_have_flow(ctx.else_branch);
+        let then_has_advance = branches_have_advance(ctx.then_branch);
 
         // Snapshot pre-body versions
         let pre_body_versions: BTreeMap<String, u32> = self
@@ -1316,83 +1325,80 @@ impl SmtWriter {
         // Determine which flow branch to encode and what guard to use
         if then_has_flow && !else_has_flow {
             // `if cond { fn }` — combined guard
-            for s in then_branch {
+            for s in ctx.then_branch {
                 match s {
-                    Stmt::Call(name) => self.encode_call(name, prog),
+                    Stmt::Call(name) => self.encode_call(name, ctx.prog),
                     Stmt::FlowAssign { name, op, expr } => self.encode_flow_assign(name, *op, expr),
                     _ => {}
                 }
             }
-            let cond_smt = self.encode_mixed_expr(cond, spec_name, comp_states);
-            let guard = format!("(and (= {} true) {})", guard_var, cond_smt);
+            let cond_smt = self.encode_mixed_expr(ctx.cond, ctx.spec_name, ctx.comp_states);
+            let guard = format!("(and (= {} true) {})", ctx.guard_var, cond_smt);
             self.emit_flow_ite_guard(&guard, &pre_body_versions);
         } else if else_has_flow {
-            // `if cond { ... } else { fn }` or `if cond { fn } else { fn }`
-            // Encode else-branch flow, use state-only guard (matching Go behavior)
-            for s in else_branch {
+            for s in ctx.else_branch {
                 match s {
-                    Stmt::Call(name) => self.encode_call(name, prog),
+                    Stmt::Call(name) => self.encode_call(name, ctx.prog),
                     Stmt::FlowAssign { name, op, expr } => self.encode_flow_assign(name, *op, expr),
                     _ => {}
                 }
             }
-            let guard = format!("(= {} true)", guard_var);
+            let guard = format!("(= {} true)", ctx.guard_var);
             self.emit_flow_ite_guard(&guard, &pre_body_versions);
 
-            // If then also has flow, encode it with combined guard
             if then_has_flow {
                 let pre2: BTreeMap<String, u32> = self
                     .all_vars
                     .iter()
                     .map(|v| (v.clone(), self.ssa.current(v)))
                     .collect();
-                for s in then_branch {
+                for s in ctx.then_branch {
                     match s {
-                        Stmt::Call(name) => self.encode_call(name, prog),
+                        Stmt::Call(name) => self.encode_call(name, ctx.prog),
                         Stmt::FlowAssign { name, op, expr } => self.encode_flow_assign(name, *op, expr),
                         _ => {}
                     }
                 }
-                let cond_smt = self.encode_mixed_expr(cond, spec_name, comp_states);
-                let guard = format!("(and (= {} true) {})", guard_var, cond_smt);
+                let cond_smt = self.encode_mixed_expr(ctx.cond, ctx.spec_name, ctx.comp_states);
+                let guard = format!("(and (= {} true) {})", ctx.guard_var, cond_smt);
                 self.emit_flow_ite_guard(&guard, &pre2);
             }
         }
 
         // Handle advance in then branch
         if then_has_advance {
-            for s in then_branch {
+            for s in ctx.then_branch {
                 if let Stmt::Advance(target) = s {
                     let target_name = target.strip_prefix("this.").unwrap_or(target);
-                    let target_qname = format!("{}_{}_{}", spec_name, comp, target_name);
+                    let target_qname = format!("{}_{}_{}", ctx.spec_name, ctx.comp, target_name);
                     let pre_ver = self.ssa.current(&target_qname);
                     let v = self.ssa.bump(&target_qname);
                     let vname = format!("{}_{}", target_qname, v);
                     self.declare(&vname, "Bool");
                     self.assert_smt(&format!("(= {} true)", vname));
 
-                    let cond_smt = self.encode_mixed_expr(cond, spec_name, comp_states);
-                    let combined = format!("(and (= {} true) {})", guard_var, cond_smt);
+                    let cond_smt = self.encode_mixed_expr(ctx.cond, ctx.spec_name, ctx.comp_states);
+                    let combined = format!("(and (= {} true) {})", ctx.guard_var, cond_smt);
                     self.emit_advance_ite_guard(&combined, &target_qname, &vname, pre_ver);
                 }
             }
         }
 
         // Handle advance in else branch
-        let else_has_advance = branches_have_advance(else_branch);
+        let else_has_advance = branches_have_advance(ctx.else_branch);
         if else_has_advance {
-            for s in else_branch {
+            for s in ctx.else_branch {
                 if let Stmt::Advance(target) = s {
                     let target_name = target.strip_prefix("this.").unwrap_or(target);
-                    let target_qname = format!("{}_{}_{}", spec_name, comp, target_name);
+                    let target_qname = format!("{}_{}_{}", ctx.spec_name, ctx.comp, target_name);
                     let pre_ver = self.ssa.current(&target_qname);
                     let v = self.ssa.bump(&target_qname);
                     let vname = format!("{}_{}", target_qname, v);
                     self.declare(&vname, "Bool");
                     self.assert_smt(&format!("(= {} true)", vname));
 
-                    let cond_smt = self.encode_mixed_expr(cond, spec_name, comp_states);
-                    let combined = format!("(and (= {} true) (not {}))", guard_var, cond_smt);
+                    let cond_smt = self.encode_mixed_expr(ctx.cond, ctx.spec_name, ctx.comp_states);
+                    let combined = format!("(and (= {} true) (not {}))", ctx.guard_var, cond_smt);
                     self.emit_advance_ite_guard(&combined, &target_qname, &vname, pre_ver);
                 }
             }
@@ -1606,15 +1612,13 @@ impl SmtWriter {
                 if !parts.is_empty() {
                     let first = &parts[0];
                     // Component state reference: drain.close
-                    if parts.len() == 2 {
-                        if let Some(states) = comp_states.get(first.as_str()) {
-                            if states.contains(&parts[1]) {
+                    if parts.len() == 2
+                        && let Some(states) = comp_states.get(first.as_str())
+                            && states.contains(&parts[1]) {
                                 let qname = format!("{}_{}_{}", spec_name, first, parts[1]);
                                 let ver = self.ssa.current(&qname);
                                 return format!("{}_{}", qname, ver);
                             }
-                        }
-                    }
                     // Flow instance property reference (fl.active, fl.vault.value)
                     if self.instances.contains_key(first.as_str()) {
                         let rest = parts[1..].join("_");
@@ -1638,13 +1642,12 @@ impl SmtWriter {
                 // Check if flattened name matches comp_state (from resolution)
                 for (comp_name, states) in comp_states {
                     let prefix = format!("{}_", comp_name);
-                    if let Some(state) = name.strip_prefix(&prefix) {
-                        if states.contains(&state.to_string()) {
+                    if let Some(state) = name.strip_prefix(&prefix)
+                        && states.contains(&state.to_string()) {
                             let qname = format!("{}_{}_{}", spec_name, comp_name, state);
                             let ver = self.ssa.current(&qname);
                             return format!("{}_{}", qname, ver);
                         }
-                    }
                 }
                 // Check if name matches a name_map key (flattened flow property)
                 if let Some(qname) = self.name_map.get(name.as_str()).cloned() {
@@ -1669,15 +1672,13 @@ impl SmtWriter {
             let parts = flatten_dot_chain(expr);
             if !parts.is_empty() {
                 let first = &parts[0];
-                if parts.len() == 2 {
-                    if let Some(states) = comp_states.get(first.as_str()) {
-                        if states.contains(&parts[1]) {
+                if parts.len() == 2
+                    && let Some(states) = comp_states.get(first.as_str())
+                        && states.contains(&parts[1]) {
                             let qname = format!("{}_{}_{}", spec_name, first, parts[1]);
                             let ver = self.ssa.current(&qname);
                             return format!("{}_{}", qname, ver);
                         }
-                    }
-                }
                 if self.instances.contains_key(first.as_str()) {
                     let rest = parts[1..].join("_");
                     if let Some(qname) = self.name_map.get(&rest).cloned() {
@@ -1695,13 +1696,12 @@ impl SmtWriter {
         if let Expr::Var(name) = expr {
             for (comp_name, states) in comp_states {
                 let prefix = format!("{}_", comp_name);
-                if let Some(state) = name.strip_prefix(&prefix) {
-                    if states.contains(&state.to_string()) {
+                if let Some(state) = name.strip_prefix(&prefix)
+                    && states.contains(&state.to_string()) {
                         let qname = format!("{}_{}_{}", spec_name, comp_name, state);
                         let ver = self.ssa.current(&qname);
                         return format!("{}_{}", qname, ver);
                     }
-                }
             }
         }
         // Fall back to normal encoding (includes wrapping for non-bare contexts)
@@ -1727,7 +1727,7 @@ impl SmtWriter {
         for (short, qname) in &self.name_map {
             // Check if any suffix of the short name is in referenced
             let is_ref = referenced.contains(short)
-                || short.split('_').last().map_or(false, |leaf| referenced.contains(leaf));
+                || short.split('_').next_back().is_some_and(|leaf| referenced.contains(leaf));
             if !is_ref {
                 to_remove.push(qname.clone());
             }
@@ -1803,8 +1803,8 @@ fn encode_mixed_system(prog: &ResolvedProgram, spec_name: &str) -> String {
 
     // Filter unreferenced stock sub-properties, but only when no flow function calls exist.
     // When any Call stmt exists (in components or run block), all stock properties may be needed.
-    let has_flow_calls = prog.run_block.iter().any(|s| stmt_has_call(s))
-        || prog.components.iter().any(|c| c.states.iter().any(|(_, body)| body.iter().any(|s| stmt_has_call(s))));
+    let has_flow_calls = prog.run_block.iter().any(stmt_has_call)
+        || prog.components.iter().any(|c| c.states.iter().any(|(_, body)| body.iter().any(stmt_has_call)));
     if !has_flow_calls {
         let referenced = collect_referenced_flow_props(prog);
         w.filter_unreferenced_vars(&referenced, spec_name);
@@ -1853,7 +1853,7 @@ fn encode_mixed_system(prog: &ResolvedProgram, spec_name: &str) -> String {
         let uses_compound = prog.components.iter().any(|c| {
             c.states.iter().any(|(_, body)| {
                 body.iter().any(|s| matches!(s, Stmt::CompoundTransition(_) | Stmt::ChooseTransition(_)))
-                    || body.iter().any(|s| stmt_contains_compound(s))
+                    || body.iter().any(stmt_contains_compound)
             })
         });
 
@@ -1963,8 +1963,8 @@ fn encode_mixed_system(prog: &ResolvedProgram, spec_name: &str) -> String {
             let (decls, asserts) = enc.encode_components_with_versions(&resolved_comps, &version_state);
             for d in &decls {
                 // Parse declaration: (declare-fun NAME () SORT)
-                if let Some(rest) = d.strip_prefix("(declare-fun ") {
-                    if let Some(name_end) = rest.find(" ()") {
+                if let Some(rest) = d.strip_prefix("(declare-fun ")
+                    && let Some(name_end) = rest.find(" ()") {
                         let name = rest[..name_end].to_string();
                         let sort_start = rest.find("() ").map(|i| i + 3).unwrap_or(0);
                         let sort_str = rest[sort_start..].trim_end_matches(')').trim();
@@ -1974,7 +1974,6 @@ fn encode_mixed_system(prog: &ResolvedProgram, spec_name: &str) -> String {
                         };
                         w.declare(&name, sort);
                     }
-                }
             }
             for a in &asserts {
                 w.assertions.push(a.clone());
@@ -2075,10 +2074,10 @@ fn stmt_has_call(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Call(_) => true,
         Stmt::IfThenElse { then_branch, else_branch, .. } => {
-            then_branch.iter().any(|s| stmt_has_call(s))
-                || else_branch.iter().any(|s| stmt_has_call(s))
+            then_branch.iter().any(stmt_has_call)
+                || else_branch.iter().any(stmt_has_call)
         }
-        Stmt::Seq(stmts) => stmts.iter().any(|s| stmt_has_call(s)),
+        Stmt::Seq(stmts) => stmts.iter().any(stmt_has_call),
         _ => false,
     }
 }
@@ -2088,10 +2087,10 @@ fn stmt_contains_compound(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::CompoundTransition(_) | Stmt::ChooseTransition(_) => true,
         Stmt::IfThenElse { then_branch, else_branch, .. } => {
-            then_branch.iter().any(|s| stmt_contains_compound(s))
-                || else_branch.iter().any(|s| stmt_contains_compound(s))
+            then_branch.iter().any(stmt_contains_compound)
+                || else_branch.iter().any(stmt_contains_compound)
         }
-        Stmt::Seq(stmts) => stmts.iter().any(|s| stmt_contains_compound(s)),
+        Stmt::Seq(stmts) => stmts.iter().any(stmt_contains_compound),
         _ => false,
     }
 }
@@ -2134,7 +2133,7 @@ fn pre_resolve_stmt(stmt: &Stmt, spec_name: &str, w: &SmtWriter) -> Stmt {
     }
 }
 
-fn pre_resolve_expr(expr: &Expr, spec_name: &str, w: &SmtWriter) -> Expr {
+fn pre_resolve_expr(expr: &Expr, _spec_name: &str, w: &SmtWriter) -> Expr {
     match expr {
         Expr::Dot { expr: base, field } => {
             let parts = flatten_dot_chain(expr);
@@ -2154,18 +2153,18 @@ fn pre_resolve_expr(expr: &Expr, spec_name: &str, w: &SmtWriter) -> Expr {
             }
             // Not a flow ref, resolve sub-expressions
             Expr::Dot {
-                expr: Box::new(pre_resolve_expr(base, spec_name, w)),
+                expr: Box::new(pre_resolve_expr(base, _spec_name, w)),
                 field: field.clone(),
             }
         }
         Expr::UnOp { op, expr: inner } => Expr::UnOp {
             op: *op,
-            expr: Box::new(pre_resolve_expr(inner, spec_name, w)),
+            expr: Box::new(pre_resolve_expr(inner, _spec_name, w)),
         },
         Expr::BinOp { op, left, right } => Expr::BinOp {
             op: *op,
-            left: Box::new(pre_resolve_expr(left, spec_name, w)),
-            right: Box::new(pre_resolve_expr(right, spec_name, w)),
+            left: Box::new(pre_resolve_expr(left, _spec_name, w)),
+            right: Box::new(pre_resolve_expr(right, _spec_name, w)),
         },
         _ => expr.clone(),
     }
@@ -2308,43 +2307,6 @@ fn unop_to_smt(op: UnOp) -> &'static str {
     }
 }
 
-/// Collect all variable names modified in a list of statements.
-fn collect_modified_vars(stmts: &[Stmt]) -> Vec<String> {
-    let mut vars = Vec::new();
-    for stmt in stmts {
-        collect_modified_in_stmt(stmt, &mut vars);
-    }
-    vars
-}
-
-fn collect_modified_in_stmt(stmt: &Stmt, vars: &mut Vec<String>) {
-    match stmt {
-        Stmt::FlowAssign { name, .. } => {
-            if !vars.contains(name) {
-                vars.push(name.clone());
-            }
-        }
-        Stmt::IfThenElse {
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            for s in then_branch {
-                collect_modified_in_stmt(s, vars);
-            }
-            for s in else_branch {
-                collect_modified_in_stmt(s, vars);
-            }
-        }
-        Stmt::Seq(stmts) | Stmt::Parallel(stmts) => {
-            for s in stmts {
-                collect_modified_in_stmt(s, vars);
-            }
-        }
-        _ => {}
-    }
-}
-
 /// Encode "at most n of these are true".
 fn encode_at_most(exprs: &[String], n: u64) -> String {
     if n as usize >= exprs.len() {
@@ -2418,7 +2380,7 @@ mod tests {
     #[test]
     fn val_to_smt_literals() {
         assert_eq!(val_to_smt(&Val::Nat(30)), "30.0");
-        assert_eq!(val_to_smt(&Val::Float(3.14)), "3.14");
+        assert_eq!(val_to_smt(&Val::Float(3.125)), "3.125");
         assert_eq!(val_to_smt(&Val::Bool(true)), "true");
         assert_eq!(val_to_smt(&Val::Str("hi".into())), "false");
     }
@@ -2925,7 +2887,7 @@ def bar = flow{
     fizz: func{ bash.a <- bash.a[0] - 2; },
 };
 for 2 init{ gee = new bar; } run { gee.fizz; };"#;
-        let spec = fault_syntax::parser::parse_spec(&src).unwrap();
+        let spec = fault_syntax::parser::parse_spec(src).unwrap();
         let name = spec.name.clone();
         let resolved = fault_resolve::resolve_spec(spec);
         let smt = encode_program(&resolved, &name);

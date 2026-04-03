@@ -7,3 +7,6 @@ edition = "2024"
 fault_syntax = { path = "../fault_syntax" }
 fault_eval = { path = "../fault_eval" }
 fault_exec = { path = "../fault_exec" }
+
+[lints]
+workspace = true

@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn to_sval_conversions() {
         assert_eq!(to_sval(&Val::Nat(42)), SVal::Real(42.0));
-        assert_eq!(to_sval(&Val::Float(3.14)), SVal::Real(3.14));
+        assert_eq!(to_sval(&Val::Float(3.125)), SVal::Real(3.125));
         assert_eq!(to_sval(&Val::Bool(true)), SVal::Bool(true));
         assert_eq!(to_sval(&Val::Str("hello".into())), SVal::Bool(false));
         assert_eq!(to_sval(&Val::Unknown), SVal::Nil);
