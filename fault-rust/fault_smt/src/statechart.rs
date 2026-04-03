@@ -100,6 +100,20 @@ impl StateChartEncoder {
         (self.decls.clone(), self.asserts.clone())
     }
 
+    /// Encode components using pre-initialized version state.
+    /// Used by mixed system encoder after SmtWriter has handled init/start states.
+    pub fn encode_components_with_versions(
+        &mut self,
+        components: &[CompDef],
+        initial_versions: &BTreeMap<String, u32>,
+    ) -> (Vec<String>, Vec<String>) {
+        self.versions = initial_versions.clone();
+        for comp in components {
+            self.encode_component(comp);
+        }
+        (self.decls.clone(), self.asserts.clone())
+    }
+
     fn encode_component(&mut self, comp: &CompDef) {
         let state_names: Vec<String> = comp.states.iter().map(|(n, _)| n.clone()).collect();
 
@@ -142,6 +156,9 @@ impl StateChartEncoder {
             }
             Transition::ChooseOr(branches) => {
                 self.encode_choose_body(comp_name, state_name, &branches, all_states);
+            }
+            Transition::CompoundChoose(branches) => {
+                self.encode_compound_choose_body(comp_name, state_name, &branches, all_states);
             }
             Transition::Conditional(cond, then_trans, else_trans) => {
                 self.encode_conditional(
@@ -431,17 +448,311 @@ impl StateChartEncoder {
         self.emit_exclusivity(&selectors);
     }
 
+    /// Encode compound Or/And choose body: only bump ACTIVE targets per branch.
+    /// Used for CompoundTransition with mixed Or/And (not explicit choose keyword).
+    fn encode_compound_choose_body(
+        &mut self,
+        comp: &str,
+        state: &str,
+        branches: &[ChooseBranch],
+        _all_states: &[String],
+    ) {
+        // Collect all affected target states across all branches
+        let mut affected: Vec<String> = Vec::new();
+        for branch in branches {
+            match branch {
+                ChooseBranch::Advance(t) => {
+                    if !affected.contains(t) {
+                        affected.push(t.clone());
+                    }
+                }
+                ChooseBranch::AdvanceAnd(ts) => {
+                    for t in ts {
+                        if !affected.contains(t) {
+                            affected.push(t.clone());
+                        }
+                    }
+                }
+                ChooseBranch::Stay => {
+                    if !affected.contains(&state.to_string()) {
+                        affected.push(state.to_string());
+                    }
+                }
+            }
+        }
+
+        if affected.is_empty() {
+            return;
+        }
+
+        let num_branches = branches.len();
+
+        // Create selector variables
+        let sel_base = format!("{}__state-%8", self.qname(comp, state));
+        let mut selectors = Vec::new();
+        for i in 0..num_branches {
+            let sel = format!("{}_{}", sel_base, i);
+            self.decls.push(format!("(declare-fun {} () Bool)", sel));
+            selectors.push(sel);
+        }
+
+        // Pre-body versions
+        let pre_versions: BTreeMap<String, u32> = affected
+            .iter()
+            .map(|a| {
+                let base = self.qname(comp, a);
+                let ver = *self.versions.get(&base).unwrap_or(&0);
+                (a.clone(), ver)
+            })
+            .collect();
+
+        // For each branch, determine active targets
+        let branch_active: Vec<Vec<String>> = branches
+            .iter()
+            .map(|b| match b {
+                ChooseBranch::Advance(t) => vec![t.clone()],
+                ChooseBranch::AdvanceAnd(ts) => ts.clone(),
+                ChooseBranch::Stay => vec![state.to_string()],
+            })
+            .collect();
+
+        // Only bump active targets per branch
+        let mut branch_target_versions: Vec<BTreeMap<String, String>> = Vec::new();
+        for (i, active) in branch_active.iter().enumerate() {
+            let mut target_vers = BTreeMap::new();
+            let mut parts = Vec::new();
+            for target in active {
+                let v = self.next_version(comp, target);
+                target_vers.insert(target.clone(), v.clone());
+                parts.push(format!("(= {} true)", v));
+            }
+            if parts.len() == 1 {
+                self.asserts.push(format!(
+                    "(assert (=> {} {}))",
+                    selectors[i], parts[0]
+                ));
+            } else {
+                self.asserts.push(format!(
+                    "(assert (=> {} (and {})))",
+                    selectors[i],
+                    parts.join("\n")
+                ));
+            }
+            branch_target_versions.push(target_vers);
+        }
+
+        // Shared carry-forward for ALL affected vars
+        let mut carry_vars: BTreeMap<String, String> = BTreeMap::new();
+        for aff in &affected {
+            let v = self.next_version(comp, aff);
+            carry_vars.insert(aff.clone(), v);
+        }
+
+        // selector <=> carry = branch's active versions or pre-body versions
+        for (i, active) in branch_active.iter().enumerate() {
+            let mut eqs = Vec::new();
+            for aff in &affected {
+                let carry = &carry_vars[aff];
+                if active.contains(aff) {
+                    let trans_ver = &branch_target_versions[i][aff];
+                    eqs.push(format!("(= {} {})", carry, trans_ver));
+                } else {
+                    let base = self.qname(comp, aff);
+                    let pre_ver = pre_versions[aff];
+                    eqs.push(format!("(= {} {}_{})", carry, base, pre_ver));
+                }
+            }
+            let eq_str = if eqs.len() == 1 {
+                eqs[0].clone()
+            } else {
+                format!("(and {})", eqs.join("\n"))
+            };
+            self.asserts
+                .push(format!("(assert (= {} {}))", selectors[i], eq_str));
+        }
+
+        self.emit_exclusivity(&selectors);
+    }
+
     /// Encode if-then-else conditional transition.
+    ///
+    /// Go encoding pattern:
+    /// 1. Encode else-branch transitions (bumps vars)
+    /// 2. Emit ite guard with just state-active condition
+    /// 3. Encode then-branch transitions (bumps vars further)
+    /// 4. Emit ite guard with (state-active AND user-condition)
+    ///
+    /// When condition is true: then-body results are selected (overwriting else)
+    /// When condition is false: else-body results pass through
+    /// When state not active: both ite guards take false path → pre versions
     fn encode_conditional(
         &mut self,
-        _comp: &str,
-        _state: &str,
-        _condition: &Expr,
-        _then_trans: &Transition,
-        _else_trans: Option<&Transition>,
-        _other_states: &[String],
+        comp: &str,
+        state: &str,
+        condition: &Expr,
+        then_trans: &Transition,
+        else_trans: Option<&Transition>,
+        all_states: &[String],
     ) {
-        // TODO: conditional transitions for statecharts with imports
+        // Pre-versions for the entire conditional
+        let pre_versions: BTreeMap<String, u32> = all_states
+            .iter()
+            .map(|s| {
+                let base = self.qname(comp, s);
+                let ver = *self.versions.get(&base).unwrap_or(&0);
+                (s.clone(), ver)
+            })
+            .collect();
+
+        let guard_base = self.qname(comp, state);
+        let _guard_ver = pre_versions[state];
+
+        // Step 1: Encode else-branch body (if present)
+        if let Some(else_t) = else_trans {
+            self.encode_transition_body(comp, state, else_t, all_states);
+        }
+
+        // Step 2: Emit ite guard for else-branch with just state-active
+        let post_else_versions: BTreeMap<String, u32> = all_states
+            .iter()
+            .map(|s| {
+                let base = self.qname(comp, s);
+                let ver = *self.versions.get(&base).unwrap_or(&0);
+                (s.clone(), ver)
+            })
+            .collect();
+
+        if post_else_versions != pre_versions {
+            self.emit_ite_guard(comp, state, all_states, &pre_versions);
+        }
+
+        // Snapshot versions after else ite guard
+        let mid_versions: BTreeMap<String, u32> = all_states
+            .iter()
+            .map(|s| {
+                let base = self.qname(comp, s);
+                let ver = *self.versions.get(&base).unwrap_or(&0);
+                (s.clone(), ver)
+            })
+            .collect();
+
+        // Step 3: Encode then-branch body
+        self.encode_transition_body(comp, state, then_trans, all_states);
+
+        // Step 4: Emit ite guard with (state-active AND condition)
+        let post_then_versions: BTreeMap<String, u32> = all_states
+            .iter()
+            .map(|s| {
+                let base = self.qname(comp, s);
+                let ver = *self.versions.get(&base).unwrap_or(&0);
+                (s.clone(), ver)
+            })
+            .collect();
+
+        if post_then_versions == mid_versions {
+            return; // then body produced nothing
+        }
+
+        let guard_var = format!("{}_{}", guard_base, mid_versions[state]);
+        let cond_smt = cond_expr_to_smt(condition);
+        let combined_guard = format!("(and (= {} true) {})", guard_var, cond_smt);
+
+        // Build ite with combined guard, using mid_versions as false-branch
+        let mut changed: Vec<String> = Vec::new();
+        for s in all_states {
+            let base = self.qname(comp, s);
+            let post_ver = *self.versions.get(&base).unwrap_or(&0);
+            let mid_ver = mid_versions.get(s).copied().unwrap_or(0);
+            if post_ver != mid_ver {
+                changed.push(s.clone());
+            }
+        }
+
+        if changed.is_empty() {
+            return;
+        }
+
+        let block_id = self.next_block_id();
+        let bt = format!("block{}true_0", block_id);
+        let bf = format!("block{}false_0", block_id);
+        self.decls.push(format!("(declare-fun {} () Bool)", bt));
+        self.decls.push(format!("(declare-fun {} () Bool)", bf));
+
+        let mut true_eqs = vec![
+            format!("(= {} true)", bt),
+            format!("(= {} false)", bf),
+        ];
+        let mut false_eqs = vec![
+            format!("(= {} false)", bt),
+            format!("(= {} true)", bf),
+        ];
+
+        let mut carry_true = Vec::new();
+        let mut carry_false = Vec::new();
+        for s in &changed {
+            let base = self.qname(comp, s);
+            let post_ver = self.versions[&base];
+            let mid_ver = mid_versions[s];
+            let curr_var = format!("{}_{}", base, post_ver);
+            let mid_var = format!("{}_{}", base, mid_ver);
+            let result = self.next_version(comp, s);
+            carry_true.push(format!("(= {} {})", result, curr_var));
+            carry_false.push(format!("(= {} {})", result, mid_var));
+        }
+        if carry_true.len() == 1 {
+            true_eqs.push(carry_true[0].clone());
+            false_eqs.push(carry_false[0].clone());
+        } else {
+            true_eqs.push(format!("(and {})", carry_true.join(" ")));
+            false_eqs.push(format!("(and {})", carry_false.join(" ")));
+        }
+
+        self.asserts.push(format!(
+            "(assert (ite {} (and {}) (and {})))",
+            combined_guard,
+            true_eqs.join(" "),
+            false_eqs.join(" ")
+        ));
+
+        self.asserts.push(format!(
+            "(assert (or (and {} (not {})) (and (not {}) {})))",
+            bt, bf, bt, bf
+        ));
+    }
+
+    /// Encode a transition body (dispatches to the appropriate method).
+    fn encode_transition_body(
+        &mut self,
+        comp: &str,
+        state: &str,
+        trans: &Transition,
+        all_states: &[String],
+    ) {
+        let pre_versions: BTreeMap<String, u32> = all_states
+            .iter()
+            .map(|s| {
+                let base = self.qname(comp, s);
+                let ver = *self.versions.get(&base).unwrap_or(&0);
+                (s.clone(), ver)
+            })
+            .collect();
+        match trans {
+            Transition::Stay => self.encode_stay_body(comp, state),
+            Transition::AdvanceAnd(targets) => self.encode_advance_and_body(comp, state, targets),
+            Transition::AdvanceOr(targets) => {
+                self.encode_advance_or_body(comp, state, targets, &pre_versions);
+            }
+            Transition::ChooseOr(branches) => {
+                self.encode_choose_body(comp, state, branches, all_states);
+            }
+            Transition::CompoundChoose(branches) => {
+                self.encode_compound_choose_body(comp, state, branches, all_states);
+            }
+            Transition::Conditional(cond, then_t, else_t) => {
+                self.encode_conditional(comp, state, cond, then_t, else_t.as_deref(), all_states);
+            }
+            Transition::Empty => {}
+        }
     }
 
     /// Emit exclusivity constraint: exactly one of the selectors is true.
@@ -481,8 +792,10 @@ enum Transition {
     AdvanceAnd(Vec<String>),
     /// advance(X) || advance(Y) — exclusive branches
     AdvanceOr(Vec<String>),
-    /// choose — solver-chosen branches
+    /// choose — solver-chosen branches (bump ALL affected vars per branch)
     ChooseOr(Vec<ChooseBranch>),
+    /// compound Or/And transition — bump only ACTIVE targets per branch
+    CompoundChoose(Vec<ChooseBranch>),
     /// if cond then transition else transition
     Conditional(Expr, Box<Transition>, Option<Box<Transition>>),
 }
@@ -573,13 +886,23 @@ fn analyze_expr(expr: &Expr) -> Transition {
             left,
             right,
         } => {
-            let mut targets = Vec::new();
-            collect_or_targets(left, &mut targets);
-            collect_or_targets(right, &mut targets);
-            if targets.is_empty() {
-                Transition::Empty
+            // Check if any branch has nested AND — if so, use CompoundChoose
+            if or_has_and_branch(expr) {
+                let branches = extract_choose_branches(expr);
+                if branches.is_empty() {
+                    Transition::Empty
+                } else {
+                    Transition::CompoundChoose(branches)
+                }
             } else {
-                Transition::AdvanceOr(targets)
+                let mut targets = Vec::new();
+                collect_or_targets(left, &mut targets);
+                collect_or_targets(right, &mut targets);
+                if targets.is_empty() {
+                    Transition::Empty
+                } else {
+                    Transition::AdvanceOr(targets)
+                }
             }
         }
         Expr::Var(name) if name.starts_with("__advance_") => {
@@ -593,6 +916,17 @@ fn analyze_expr(expr: &Expr) -> Transition {
         }
         Expr::Var(name) if name == "__stay" => Transition::Stay,
         _ => Transition::Empty,
+    }
+}
+
+/// Check if an Or expression has any branch that's an And (mixed pattern).
+fn or_has_and_branch(expr: &Expr) -> bool {
+    match expr {
+        Expr::BinOp { op: BinOp::Or, left, right } => {
+            or_has_and_branch(left) || or_has_and_branch(right)
+        }
+        Expr::BinOp { op: BinOp::And, .. } => true,
+        _ => false,
     }
 }
 
@@ -681,5 +1015,44 @@ fn collect_choose_branches(expr: &Expr, branches: &mut Vec<ChooseBranch>) {
             branches.push(ChooseBranch::Stay);
         }
         _ => {}
+    }
+}
+
+/// Render a condition expression to SMT-LIB2.
+/// Used for pre-resolved conditions where Dot chains have been replaced
+/// with qualified Var names (e.g., `Var("mixedcalls_fl_active_0")`).
+fn cond_expr_to_smt(expr: &Expr) -> String {
+    match expr {
+        Expr::Var(name) => {
+            // Pre-resolved vars are already qualified with spec_name and version
+            format!("(= {} true)", name)
+        }
+        Expr::UnOp { op: fault_syntax::UnOp::Not, expr: inner } => {
+            // For Not, don't wrap inner Bool var in (= x true) — just use bare name
+            let inner_smt = cond_expr_to_smt_bare(inner);
+            format!("(not {})", inner_smt)
+        }
+        Expr::BinOp { op: BinOp::And, left, right } => {
+            format!("(and {} {})", cond_expr_to_smt(left), cond_expr_to_smt(right))
+        }
+        Expr::BinOp { op: BinOp::Or, left, right } => {
+            format!("(or {} {})", cond_expr_to_smt(left), cond_expr_to_smt(right))
+        }
+        Expr::Lit(val) => match val {
+            fault_syntax::Val::Bool(b) => b.to_string(),
+            fault_syntax::Val::Nat(n) => format!("{}.0", n),
+            fault_syntax::Val::Float(f) => format!("{}", f),
+            fault_syntax::Val::Str(s) => format!("\"{}\"", s),
+            _ => format!("{:?}", val),
+        },
+        _ => format!("UNHANDLED_COND({:?})", expr),
+    }
+}
+
+/// Render a condition expression to SMT-LIB2 without Bool wrapping.
+fn cond_expr_to_smt_bare(expr: &Expr) -> String {
+    match expr {
+        Expr::Var(name) => name.clone(),
+        _ => cond_expr_to_smt(expr),
     }
 }

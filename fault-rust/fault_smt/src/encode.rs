@@ -740,15 +740,13 @@ impl SmtWriter {
             phi_vers.push(phi);
         }
 
-        // Block tracking booleans — separate IDs for then/else
+        // Block tracking booleans — same ID for true/false (matches Go oracle)
         self.block_counter += 1;
-        let then_block_id = self.block_counter;
-        self.block_counter += 1;
-        let else_block_id = self.block_counter;
+        let block_id = self.block_counter;
 
         let round_num = self.round_entries.len();
-        let true_name = format!("block{}true_{}", then_block_id, round_num);
-        let false_name = format!("block{}false_{}", else_block_id, round_num);
+        let true_name = format!("block{}true_{}", block_id, round_num);
+        let false_name = format!("block{}false_{}", block_id, round_num);
         self.declare(&true_name, "Bool");
         self.declare(&false_name, "Bool");
 
@@ -1070,7 +1068,604 @@ impl SmtWriter {
         }
     }
 
+    // ── Mixed system (statechart + flows) helpers ─────────────────────
+
+    /// Encode a state function body with an outer ite guard.
+    fn encode_state_func(
+        &mut self,
+        comp: &str,
+        state: &str,
+        body: &[Stmt],
+        prog: &ResolvedProgram,
+        spec_name: &str,
+        comp_states: &BTreeMap<String, Vec<String>>,
+    ) {
+        let state_qname = format!("{}_{}_{}", spec_name, comp, state);
+        let guard_ver = self.ssa.current(&state_qname);
+        let guard_var = format!("{}_{}", state_qname, guard_ver);
+
+        // Handle stay() — bump state var, set true, wrap in state-active ite
+        if body.len() == 1 && matches!(&body[0], Stmt::Stay) {
+            let pre_ver = self.ssa.current(&state_qname);
+            let new_ver = self.ssa.bump(&state_qname);
+            let new_vname = format!("{}_{}", state_qname, new_ver);
+            self.declare(&new_vname, "Bool");
+            self.assert_smt(&format!("(= {} true)", new_vname));
+            self.emit_state_active_ite(&guard_var, &state_qname, new_ver, pre_ver);
+            return;
+        }
+
+        // Snapshot pre-body SSA versions for all tracked variables
+        let pre_flow: BTreeMap<String, u32> = self
+            .all_vars
+            .iter()
+            .map(|v| (v.clone(), self.ssa.current(v)))
+            .collect();
+
+        // Encode body
+        let pre_assert_count = self.assertions.len();
+        for stmt in body {
+            self.encode_mixed_stmt_in_state(stmt, prog, spec_name, comp, comp_states, &guard_var);
+        }
+
+        if self.assertions.len() == pre_assert_count {
+            return; // body produced nothing
+        }
+
+        // Collect flow vars that changed — they need an outer state-active ite guard
+        // (but only those not already wrapped by inner ite guards from conditionals)
+        let mut changed: Vec<String> = Vec::new();
+        for v in &self.all_vars {
+            if self.ssa.current(v) != pre_flow.get(v).copied().unwrap_or(0) {
+                changed.push(v.clone());
+            }
+        }
+
+        // If the body was just a bare Call (no conditional), wrap the changed
+        // vars in a state-active ite guard.
+        if body.len() == 1 && matches!(&body[0], Stmt::Call(_)) && !changed.is_empty() {
+            self.block_counter += 1;
+            let block_id = self.block_counter;
+            let bt = format!("block{}true_0", block_id);
+            let bf = format!("block{}false_0", block_id);
+            self.declare(&bt, "Bool");
+            self.declare(&bf, "Bool");
+
+            let mut true_eqs = vec![
+                format!("(= {} true)", bt),
+                format!("(= {} false)", bf),
+            ];
+            let mut false_eqs = vec![
+                format!("(= {} false)", bt),
+                format!("(= {} true)", bf),
+            ];
+
+            for v in &changed {
+                let post = self.ssa.current(v);
+                let pre = pre_flow[v];
+                let nv = self.ssa.bump(v);
+                let result_name = format!("{}_{}", v, nv);
+                let sort = self.var_sorts.get(v).copied().unwrap_or("Real");
+                self.declare(&result_name, sort);
+                true_eqs.push(format!("(= {} {}_{})", result_name, v, post));
+                false_eqs.push(format!("(= {} {}_{})", result_name, v, pre));
+            }
+
+            let guard = format!("(= {} true)", guard_var);
+            self.assert_smt(&format!(
+                "(ite {} (and {}) (and {}))",
+                guard,
+                true_eqs.join(" "),
+                false_eqs.join(" ")
+            ));
+            self.assertions.push(format!(
+                "(assert (or (and {}\n(not {}))\n(and (not {})\n{})))",
+                bt, bf, bt, bf
+            ));
+        }
+    }
+
+    /// Encode a statement inside a state function body.
+    fn encode_mixed_stmt_in_state(
+        &mut self,
+        stmt: &Stmt,
+        prog: &ResolvedProgram,
+        spec_name: &str,
+        comp: &str,
+        comp_states: &BTreeMap<String, Vec<String>>,
+        guard_var: &str,
+    ) {
+        match stmt {
+            Stmt::Call(name) => self.encode_call(name, prog),
+            Stmt::FlowAssign { name, op, expr } => self.encode_flow_assign(name, *op, expr),
+            Stmt::IfThenElse { cond, then_branch, else_branch } => {
+                self.encode_mixed_if_in_state(
+                    cond, then_branch, else_branch, prog, spec_name, comp, comp_states, guard_var,
+                );
+            }
+            Stmt::Advance(target) => {
+                let target_name = target.strip_prefix("this.").unwrap_or(target);
+                let target_qname = format!("{}_{}_{}", spec_name, comp, target_name);
+                let v = self.ssa.bump(&target_qname);
+                let vname = format!("{}_{}", target_qname, v);
+                self.declare(&vname, "Bool");
+                self.assert_smt(&format!("(= {} true)", vname));
+            }
+            Stmt::Stay => {}
+            Stmt::Seq(stmts) => {
+                for s in stmts {
+                    self.encode_mixed_stmt_in_state(s, prog, spec_name, comp, comp_states, guard_var);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Encode an if-then-else inside a state function.
+    ///
+    /// Pattern from Go oracle:
+    /// - `if cond { fn }` → combined (state AND cond) guard
+    /// - `if cond { advance } else { fn }` → fn gets state-only guard, advance gets combined
+    fn encode_mixed_if_in_state(
+        &mut self,
+        cond: &Expr,
+        then_branch: &[Stmt],
+        else_branch: &[Stmt],
+        prog: &ResolvedProgram,
+        spec_name: &str,
+        comp: &str,
+        comp_states: &BTreeMap<String, Vec<String>>,
+        guard_var: &str,
+    ) {
+        let then_has_flow = branches_have_flow(then_branch);
+        let else_has_flow = branches_have_flow(else_branch);
+        let then_has_advance = branches_have_advance(then_branch);
+
+        // Snapshot pre-body versions
+        let pre_body_versions: BTreeMap<String, u32> = self
+            .all_vars
+            .iter()
+            .map(|v| (v.clone(), self.ssa.current(v)))
+            .collect();
+
+        // Determine which flow branch to encode and what guard to use
+        if then_has_flow && !else_has_flow {
+            // `if cond { fn }` — combined guard
+            for s in then_branch {
+                match s {
+                    Stmt::Call(name) => self.encode_call(name, prog),
+                    Stmt::FlowAssign { name, op, expr } => self.encode_flow_assign(name, *op, expr),
+                    _ => {}
+                }
+            }
+            let cond_smt = self.encode_mixed_expr(cond, spec_name, comp_states);
+            let guard = format!("(and (= {} true) {})", guard_var, cond_smt);
+            self.emit_flow_ite_guard(&guard, &pre_body_versions);
+        } else if else_has_flow {
+            // `if cond { ... } else { fn }` or `if cond { fn } else { fn }`
+            // Encode else-branch flow, use state-only guard (matching Go behavior)
+            for s in else_branch {
+                match s {
+                    Stmt::Call(name) => self.encode_call(name, prog),
+                    Stmt::FlowAssign { name, op, expr } => self.encode_flow_assign(name, *op, expr),
+                    _ => {}
+                }
+            }
+            let guard = format!("(= {} true)", guard_var);
+            self.emit_flow_ite_guard(&guard, &pre_body_versions);
+
+            // If then also has flow, encode it with combined guard
+            if then_has_flow {
+                let pre2: BTreeMap<String, u32> = self
+                    .all_vars
+                    .iter()
+                    .map(|v| (v.clone(), self.ssa.current(v)))
+                    .collect();
+                for s in then_branch {
+                    match s {
+                        Stmt::Call(name) => self.encode_call(name, prog),
+                        Stmt::FlowAssign { name, op, expr } => self.encode_flow_assign(name, *op, expr),
+                        _ => {}
+                    }
+                }
+                let cond_smt = self.encode_mixed_expr(cond, spec_name, comp_states);
+                let guard = format!("(and (= {} true) {})", guard_var, cond_smt);
+                self.emit_flow_ite_guard(&guard, &pre2);
+            }
+        }
+
+        // Handle advance in then branch
+        if then_has_advance {
+            for s in then_branch {
+                if let Stmt::Advance(target) = s {
+                    let target_name = target.strip_prefix("this.").unwrap_or(target);
+                    let target_qname = format!("{}_{}_{}", spec_name, comp, target_name);
+                    let pre_ver = self.ssa.current(&target_qname);
+                    let v = self.ssa.bump(&target_qname);
+                    let vname = format!("{}_{}", target_qname, v);
+                    self.declare(&vname, "Bool");
+                    self.assert_smt(&format!("(= {} true)", vname));
+
+                    let cond_smt = self.encode_mixed_expr(cond, spec_name, comp_states);
+                    let combined = format!("(and (= {} true) {})", guard_var, cond_smt);
+                    self.emit_advance_ite_guard(&combined, &target_qname, &vname, pre_ver);
+                }
+            }
+        }
+
+        // Handle advance in else branch
+        let else_has_advance = branches_have_advance(else_branch);
+        if else_has_advance {
+            for s in else_branch {
+                if let Stmt::Advance(target) = s {
+                    let target_name = target.strip_prefix("this.").unwrap_or(target);
+                    let target_qname = format!("{}_{}_{}", spec_name, comp, target_name);
+                    let pre_ver = self.ssa.current(&target_qname);
+                    let v = self.ssa.bump(&target_qname);
+                    let vname = format!("{}_{}", target_qname, v);
+                    self.declare(&vname, "Bool");
+                    self.assert_smt(&format!("(= {} true)", vname));
+
+                    let cond_smt = self.encode_mixed_expr(cond, spec_name, comp_states);
+                    let combined = format!("(and (= {} true) (not {}))", guard_var, cond_smt);
+                    self.emit_advance_ite_guard(&combined, &target_qname, &vname, pre_ver);
+                }
+            }
+        }
+    }
+
+    /// Emit an ite guard for flow variable changes.
+    fn emit_flow_ite_guard(
+        &mut self,
+        guard: &str,
+        pre_versions: &BTreeMap<String, u32>,
+    ) {
+        let mut changed: Vec<String> = Vec::new();
+        for v in &self.all_vars {
+            if self.ssa.current(v) != pre_versions.get(v).copied().unwrap_or(0) {
+                changed.push(v.clone());
+            }
+        }
+
+        if changed.is_empty() {
+            return;
+        }
+
+        self.block_counter += 1;
+        let block_id = self.block_counter;
+        let bt = format!("block{}true_0", block_id);
+        let bf = format!("block{}false_0", block_id);
+        self.declare(&bt, "Bool");
+        self.declare(&bf, "Bool");
+
+        let mut true_eqs = vec![format!("(= {} true)", bt), format!("(= {} false)", bf)];
+        let mut false_eqs = vec![format!("(= {} false)", bt), format!("(= {} true)", bf)];
+
+        for v in &changed {
+            let post = self.ssa.current(v);
+            let pre = pre_versions[v];
+            let nv = self.ssa.bump(v);
+            let result_name = format!("{}_{}", v, nv);
+            let sort = self.var_sorts.get(v).copied().unwrap_or("Real");
+            self.declare(&result_name, sort);
+            true_eqs.push(format!("(= {} {}_{})", result_name, v, post));
+            false_eqs.push(format!("(= {} {}_{})", result_name, v, pre));
+        }
+
+        self.assert_smt(&format!(
+            "(ite {} (and {}) (and {}))",
+            guard,
+            true_eqs.join(" "),
+            false_eqs.join(" ")
+        ));
+        self.assertions.push(format!(
+            "(assert (or (and {}\n(not {}))\n(and (not {})\n{})))",
+            bt, bf, bt, bf
+        ));
+    }
+
+    /// Emit an ite guard for an advance (state Bool variable change).
+    fn emit_advance_ite_guard(
+        &mut self,
+        guard: &str,
+        target_qname: &str,
+        advance_vname: &str,
+        pre_ver: u32,
+    ) {
+        self.block_counter += 1;
+        let block_id = self.block_counter;
+        let bt = format!("block{}true_0", block_id);
+        let bf = format!("block{}false_0", block_id);
+        self.declare(&bt, "Bool");
+        self.declare(&bf, "Bool");
+
+        let rv = self.ssa.bump(target_qname);
+        let result_name = format!("{}_{}", target_qname, rv);
+        self.declare(&result_name, "Bool");
+
+        self.assert_smt(&format!(
+            "(ite {} (and (= {} true) (= {} false) (= {} {})) \
+             (and (= {} false) (= {} true) (= {} {}_{})))",
+            guard,
+            bt, bf, result_name, advance_vname,
+            bt, bf, result_name, target_qname, pre_ver
+        ));
+        self.assertions.push(format!(
+            "(assert (or (and {}\n(not {}))\n(and (not {})\n{})))",
+            bt, bf, bt, bf
+        ));
+    }
+
+    /// Emit a state-active ite guard for a single variable (used by stay/advance).
+    fn emit_state_active_ite(
+        &mut self,
+        guard_var: &str,
+        target_qname: &str,
+        new_ver: u32,
+        pre_ver: u32,
+    ) {
+        let new_vname = format!("{}_{}", target_qname, new_ver);
+        let guard = format!("(= {} true)", guard_var);
+        self.emit_advance_ite_guard(&guard, target_qname, &new_vname, pre_ver);
+    }
+
+    /// Encode a statement in a mixed system run block.
+    fn encode_mixed_stmt(
+        &mut self,
+        stmt: &Stmt,
+        prog: &ResolvedProgram,
+        spec_name: &str,
+        comp_states: &BTreeMap<String, Vec<String>>,
+    ) {
+        match stmt {
+            Stmt::Call(name) => self.encode_call(name, prog),
+            Stmt::IfThenElse { cond, then_branch, else_branch } => {
+                self.encode_mixed_run_if(cond, then_branch, else_branch, prog, spec_name, comp_states);
+            }
+            Stmt::Seq(stmts) => {
+                for s in stmts {
+                    self.encode_mixed_stmt(s, prog, spec_name, comp_states);
+                }
+            }
+            _ => self.encode_stmt(stmt, prog),
+        }
+    }
+
+    /// Encode an if-then-else in a run block that may reference state variables.
+    fn encode_mixed_run_if(
+        &mut self,
+        cond: &Expr,
+        then_branch: &[Stmt],
+        _else_branch: &[Stmt],
+        prog: &ResolvedProgram,
+        spec_name: &str,
+        comp_states: &BTreeMap<String, Vec<String>>,
+    ) {
+        let pre_versions: BTreeMap<String, u32> = self
+            .all_vars
+            .iter()
+            .map(|v| (v.clone(), self.ssa.current(v)))
+            .collect();
+
+        for s in then_branch {
+            self.encode_stmt(s, prog);
+        }
+
+        let mut changed: Vec<String> = Vec::new();
+        for v in &self.all_vars {
+            if self.ssa.current(v) != pre_versions.get(v).copied().unwrap_or(0) {
+                changed.push(v.clone());
+            }
+        }
+
+        if changed.is_empty() {
+            return;
+        }
+
+        let cond_smt = self.encode_mixed_expr(cond, spec_name, comp_states);
+
+        let block_id = self.block_counter;
+        self.block_counter += 1;
+        let bt = format!("block{}true_0", block_id);
+        let bf = format!("block{}false_0", block_id);
+        self.declare(&bt, "Bool");
+        self.declare(&bf, "Bool");
+
+        let mut true_eqs = vec![format!("(= {} true)", bt), format!("(= {} false)", bf)];
+        let mut false_eqs = vec![format!("(= {} false)", bt), format!("(= {} true)", bf)];
+
+        for v in &changed {
+            let post = self.ssa.current(v);
+            let pre = pre_versions[v];
+            let nv = self.ssa.bump(v);
+            let result_name = format!("{}_{}", v, nv);
+            let sort = self.var_sorts.get(v).copied().unwrap_or("Real");
+            self.declare(&result_name, sort);
+            true_eqs.push(format!("(= {} {}_{})", result_name, v, post));
+            false_eqs.push(format!("(= {} {}_{})", result_name, v, pre));
+        }
+
+        self.assert_smt(&format!(
+            "(ite {} (and {}) (and {}))",
+            cond_smt,
+            true_eqs.join(" "),
+            false_eqs.join(" ")
+        ));
+        self.assertions.push(format!(
+            "(assert (or (and {}\n(not {}))\n(and (not {})\n{})))",
+            bt, bf, bt, bf
+        ));
+    }
+
+    /// Encode an expression that may reference state variables or flow properties.
+    fn encode_mixed_expr(
+        &mut self,
+        expr: &Expr,
+        spec_name: &str,
+        comp_states: &BTreeMap<String, Vec<String>>,
+    ) -> String {
+        match expr {
+            Expr::Lit(val) => val_to_smt(val),
+            Expr::UnOp { op: UnOp::Not, expr: inner } => {
+                let inner_smt = self.encode_mixed_expr_bare(inner, spec_name, comp_states);
+                format!("(not {})", inner_smt)
+            }
+            Expr::BinOp { op, left, right } => {
+                let l = self.encode_mixed_expr(left, spec_name, comp_states);
+                let r = self.encode_mixed_expr(right, spec_name, comp_states);
+                format!("({} {} {})", binop_to_smt(*op), l, r)
+            }
+            Expr::Dot { .. } => {
+                // Flatten dot chain to parts: fl.vault.value → ["fl", "vault", "value"]
+                let parts = flatten_dot_chain(expr);
+                if !parts.is_empty() {
+                    let first = &parts[0];
+                    // Component state reference: drain.close
+                    if parts.len() == 2 {
+                        if let Some(states) = comp_states.get(first.as_str()) {
+                            if states.contains(&parts[1]) {
+                                let qname = format!("{}_{}_{}", spec_name, first, parts[1]);
+                                let ver = self.ssa.current(&qname);
+                                return format!("{}_{}", qname, ver);
+                            }
+                        }
+                    }
+                    // Flow instance property reference (fl.active, fl.vault.value)
+                    if self.instances.contains_key(first.as_str()) {
+                        let rest = parts[1..].join("_");
+                        // Try name_map with just the property part
+                        if let Some(qname) = self.name_map.get(&rest).cloned() {
+                            return self.mixed_var_versioned(&qname);
+                        }
+                        // Try with instance+rest
+                        let inst_rest = format!("{}_{}", first, rest);
+                        if let Some(qname) = self.name_map.get(&inst_rest).cloned() {
+                            return self.mixed_var_versioned(&qname);
+                        }
+                        // Construct directly
+                        let qname = format!("{}_{}", spec_name, inst_rest);
+                        return self.mixed_var_versioned(&qname);
+                    }
+                }
+                self.encode_expr(expr)
+            }
+            Expr::Var(name) => {
+                // Check if flattened name matches comp_state (from resolution)
+                for (comp_name, states) in comp_states {
+                    let prefix = format!("{}_", comp_name);
+                    if let Some(state) = name.strip_prefix(&prefix) {
+                        if states.contains(&state.to_string()) {
+                            let qname = format!("{}_{}_{}", spec_name, comp_name, state);
+                            let ver = self.ssa.current(&qname);
+                            return format!("{}_{}", qname, ver);
+                        }
+                    }
+                }
+                // Check if name matches a name_map key (flattened flow property)
+                if let Some(qname) = self.name_map.get(name.as_str()).cloned() {
+                    return self.mixed_var_versioned(&qname);
+                }
+                self.encode_expr(expr)
+            }
+            _ => self.encode_expr(expr),
+        }
+    }
+
+    /// Like `encode_mixed_expr` but doesn't wrap Bool vars in `(= x true)`.
+    /// Used inside `not` context where wrapping is redundant.
+    fn encode_mixed_expr_bare(
+        &mut self,
+        expr: &Expr,
+        spec_name: &str,
+        comp_states: &BTreeMap<String, Vec<String>>,
+    ) -> String {
+        // For Dot chains that resolve to a qualified var, return bare name
+        if let Expr::Dot { .. } = expr {
+            let parts = flatten_dot_chain(expr);
+            if !parts.is_empty() {
+                let first = &parts[0];
+                if parts.len() == 2 {
+                    if let Some(states) = comp_states.get(first.as_str()) {
+                        if states.contains(&parts[1]) {
+                            let qname = format!("{}_{}_{}", spec_name, first, parts[1]);
+                            let ver = self.ssa.current(&qname);
+                            return format!("{}_{}", qname, ver);
+                        }
+                    }
+                }
+                if self.instances.contains_key(first.as_str()) {
+                    let rest = parts[1..].join("_");
+                    if let Some(qname) = self.name_map.get(&rest).cloned() {
+                        let ver = self.ssa.current(&qname);
+                        return format!("{}_{}", qname, ver);
+                    }
+                    let inst_rest = format!("{}_{}", first, rest);
+                    if let Some(qname) = self.name_map.get(&inst_rest).cloned() {
+                        let ver = self.ssa.current(&qname);
+                        return format!("{}_{}", qname, ver);
+                    }
+                }
+            }
+        }
+        if let Expr::Var(name) = expr {
+            for (comp_name, states) in comp_states {
+                let prefix = format!("{}_", comp_name);
+                if let Some(state) = name.strip_prefix(&prefix) {
+                    if states.contains(&state.to_string()) {
+                        let qname = format!("{}_{}_{}", spec_name, comp_name, state);
+                        let ver = self.ssa.current(&qname);
+                        return format!("{}_{}", qname, ver);
+                    }
+                }
+            }
+        }
+        // Fall back to normal encoding (includes wrapping for non-bare contexts)
+        self.encode_mixed_expr(expr, spec_name, comp_states)
+    }
+
+    /// Return a versioned variable name, wrapping Bool vars in `(= ... true)`.
+    fn mixed_var_versioned(&mut self, qname: &str) -> String {
+        let ver = self.ssa.current(qname);
+        let vname = format!("{}_{}", qname, ver);
+        if self.var_sorts.get(qname).copied() == Some("Bool") {
+            format!("(= {} true)", vname)
+        } else {
+            vname
+        }
+    }
+
     /// Produce the final SMT-LIB2 string.
+    /// Remove declarations and assertions for flow properties not in the referenced set.
+    fn filter_unreferenced_vars(&mut self, referenced: &HashSet<String>, _spec_name: &str) {
+        // Build set of qualified names to keep: those whose short name matches a reference
+        let mut to_remove: Vec<String> = Vec::new();
+        for (short, qname) in &self.name_map {
+            // Check if any suffix of the short name is in referenced
+            let is_ref = referenced.contains(short)
+                || short.split('_').last().map_or(false, |leaf| referenced.contains(leaf));
+            if !is_ref {
+                to_remove.push(qname.clone());
+            }
+        }
+
+        if to_remove.is_empty() {
+            return;
+        }
+
+        // Remove declarations for these qualified names
+        self.declarations.retain(|(name, _)| {
+            !to_remove.iter().any(|r| name.starts_with(r))
+        });
+        // Remove assertions referencing these
+        self.assertions.retain(|a| {
+            !to_remove.iter().any(|r| a.contains(r))
+        });
+        // Remove from declared set
+        for r in &to_remove {
+            self.declared.retain(|d| !d.starts_with(r));
+        }
+    }
+
     fn emit(&self) -> String {
         let mut out = String::new();
         out.push_str("(set-logic QF_NRA)\n");
@@ -1092,9 +1687,11 @@ impl SmtWriter {
 
 /// Encode a resolved program into SMT-LIB2 string.
 pub fn encode_program(prog: &ResolvedProgram, spec_name: &str) -> String {
-    // If this is a system with components and no stocks/flows, use statechart encoder
-    if !prog.components.is_empty() && prog.stocks.is_empty() && prog.flows.is_empty() {
-        return encode_statechart_only(prog, spec_name);
+    if !prog.components.is_empty() {
+        if prog.stocks.is_empty() && prog.flows.is_empty() {
+            return encode_statechart_only(prog, spec_name);
+        }
+        return encode_mixed_system(prog, spec_name);
     }
 
     let mut w = SmtWriter::new(spec_name);
@@ -1104,6 +1701,116 @@ pub fn encode_program(prog: &ResolvedProgram, spec_name: &str) -> String {
 
     for _ in 0..prog.rounds {
         w.encode_round(prog);
+    }
+
+    w.encode_invariants(prog);
+    w.emit()
+}
+
+/// Encode a system with both components (statechart) and imported flows.
+fn encode_mixed_system(prog: &ResolvedProgram, spec_name: &str) -> String {
+    let mut w = SmtWriter::new(spec_name);
+    w.build_mappings(prog);
+    w.encode_constants(prog);
+    w.encode_initial_values();
+    // Remove the round entry snapshot from encode_initial_values so blocks use _0 suffix
+    w.round_entries.clear();
+
+    // Filter unreferenced stock sub-properties, but only when no flow function calls exist.
+    // When any Call stmt exists (in components or run block), all stock properties may be needed.
+    let has_flow_calls = prog.run_block.iter().any(|s| stmt_has_call(s))
+        || prog.components.iter().any(|c| c.states.iter().any(|(_, body)| body.iter().any(|s| stmt_has_call(s))));
+    if !has_flow_calls {
+        let referenced = collect_referenced_flow_props(prog);
+        w.filter_unreferenced_vars(&referenced, spec_name);
+    }
+
+    // Declare and initialize state Bool variables (version 0 = false)
+    for comp in &prog.components {
+        for (state_name, _) in &comp.states {
+            let qname = format!("{}_{}_{}", spec_name, comp.name, state_name);
+            let v0 = format!("{}_0", qname);
+            w.declare(&v0, "Bool");
+            w.assert_smt(&format!("(= {} false)", v0));
+            // SSA starts at 0, don't bump yet
+        }
+    }
+
+    // Set start states to true (bump to version 1)
+    for (comp, start) in &prog.start_states {
+        let qname = format!("{}_{}_{}", spec_name, comp, start);
+        let v = w.ssa.bump(&qname);
+        let vname = format!("{}_{}", qname, v);
+        w.declare(&vname, "Bool");
+        w.assert_smt(&format!("(= {} true)", vname));
+    }
+
+    // Build state name list per component
+    let comp_states: BTreeMap<String, Vec<String>> = prog
+        .components
+        .iter()
+        .map(|c| {
+            let names: Vec<String> = c.states.iter().map(|(s, _)| s.clone()).collect();
+            (c.name.clone(), names)
+        })
+        .collect();
+
+    // Encode rounds
+    let rounds = if prog.rounds == 0 { 1 } else { prog.rounds };
+    for _ in 0..rounds {
+        if !prog.run_block.is_empty() {
+            for stmt in &prog.run_block {
+                w.encode_mixed_stmt(stmt, prog, spec_name, &comp_states);
+            }
+        }
+
+        // Determine if components use compound transitions (advance || / &&)
+        let uses_compound = prog.components.iter().any(|c| {
+            c.states.iter().any(|(_, body)| {
+                body.iter().any(|s| matches!(s, Stmt::CompoundTransition(_) | Stmt::ChooseTransition(_)))
+                    || body.iter().any(|s| stmt_contains_compound(s))
+            })
+        });
+
+        if uses_compound {
+            // Pre-resolve conditions and delegate to StateChartEncoder
+            let resolved_comps = pre_resolve_components(
+                &prog.components, spec_name, &w,
+            );
+            let mut version_state: BTreeMap<String, u32> = BTreeMap::new();
+            for comp in &prog.components {
+                for (state_name, _) in &comp.states {
+                    let qname = format!("{}_{}_{}", spec_name, comp.name, state_name);
+                    version_state.insert(qname.clone(), w.ssa.current(&qname));
+                }
+            }
+            let mut enc = crate::statechart::StateChartEncoder::new(spec_name);
+            let (decls, asserts) = enc.encode_components_with_versions(&resolved_comps, &version_state);
+            for d in &decls {
+                // Parse declaration: (declare-fun NAME () SORT)
+                if let Some(rest) = d.strip_prefix("(declare-fun ") {
+                    if let Some(name_end) = rest.find(" ()") {
+                        let name = rest[..name_end].to_string();
+                        let sort_start = rest.find("() ").map(|i| i + 3).unwrap_or(0);
+                        let sort_str = rest[sort_start..].trim_end_matches(')').trim();
+                        let sort: &'static str = match sort_str {
+                            "Bool" => "Bool",
+                            _ => "Real",
+                        };
+                        w.declare(&name, sort);
+                    }
+                }
+            }
+            for a in &asserts {
+                w.assertions.push(a.clone());
+            }
+        } else {
+            for comp in &prog.components {
+                for (state_name, body) in &comp.states {
+                    w.encode_state_func(&comp.name, state_name, body, prog, spec_name, &comp_states);
+                }
+            }
+        }
     }
 
     w.encode_invariants(prog);
@@ -1131,6 +1838,174 @@ fn encode_statechart_only(prog: &ResolvedProgram, spec_name: &str) -> String {
 // ── Helpers ─────────────────────────────────────────────────────────
 
 /// Determine the SMT sort for a value.
+/// Collect all flow property paths referenced in components and run block.
+/// Returns a set of short names like "active", "vault_value".
+fn collect_referenced_flow_props(prog: &ResolvedProgram) -> HashSet<String> {
+    let mut refs = HashSet::new();
+    for comp in &prog.components {
+        for (_, body) in &comp.states {
+            for stmt in body {
+                collect_refs_in_stmt(stmt, &mut refs);
+            }
+        }
+    }
+    for stmt in &prog.run_block {
+        collect_refs_in_stmt(stmt, &mut refs);
+    }
+    refs
+}
+
+fn collect_refs_in_stmt(stmt: &Stmt, refs: &mut HashSet<String>) {
+    match stmt {
+        Stmt::IfThenElse { cond, then_branch, else_branch } => {
+            collect_refs_in_expr(cond, refs);
+            for s in then_branch { collect_refs_in_stmt(s, refs); }
+            for s in else_branch { collect_refs_in_stmt(s, refs); }
+        }
+        Stmt::Call(name) => { refs.insert(name.clone()); }
+        Stmt::FlowAssign { name, expr, .. } => {
+            collect_refs_in_expr(&Expr::Var(name.clone()), refs);
+            collect_refs_in_expr(expr, refs);
+        }
+        Stmt::Seq(stmts) => { for s in stmts { collect_refs_in_stmt(s, refs); } }
+        _ => {}
+    }
+}
+
+fn collect_refs_in_expr(expr: &Expr, refs: &mut HashSet<String>) {
+    match expr {
+        Expr::Dot { expr: base, field: _ } => {
+            let parts = flatten_dot_chain(expr);
+            if parts.len() >= 2 {
+                // Add the leaf property name and all intermediate paths
+                refs.insert(parts[1..].join("_"));
+                for i in 1..parts.len() {
+                    refs.insert(parts[i..].join("_"));
+                }
+            }
+            collect_refs_in_expr(base, refs);
+        }
+        Expr::UnOp { expr: inner, .. } => collect_refs_in_expr(inner, refs),
+        Expr::BinOp { left, right, .. } => {
+            collect_refs_in_expr(left, refs);
+            collect_refs_in_expr(right, refs);
+        }
+        Expr::Var(name) => { refs.insert(name.clone()); }
+        _ => {}
+    }
+}
+
+/// Check if a statement (recursively) contains a flow function Call.
+fn stmt_has_call(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Call(_) => true,
+        Stmt::IfThenElse { then_branch, else_branch, .. } => {
+            then_branch.iter().any(|s| stmt_has_call(s))
+                || else_branch.iter().any(|s| stmt_has_call(s))
+        }
+        Stmt::Seq(stmts) => stmts.iter().any(|s| stmt_has_call(s)),
+        _ => false,
+    }
+}
+
+/// Check if a statement (recursively) contains CompoundTransition or ChooseTransition.
+fn stmt_contains_compound(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::CompoundTransition(_) | Stmt::ChooseTransition(_) => true,
+        Stmt::IfThenElse { then_branch, else_branch, .. } => {
+            then_branch.iter().any(|s| stmt_contains_compound(s))
+                || else_branch.iter().any(|s| stmt_contains_compound(s))
+        }
+        Stmt::Seq(stmts) => stmts.iter().any(|s| stmt_contains_compound(s)),
+        _ => false,
+    }
+}
+
+/// Pre-resolve flow variable references in component conditions.
+/// Replaces `Dot(Var("fl"), "active")` with `Var("spec_fl_active_0")`.
+fn pre_resolve_components(
+    components: &[CompDef],
+    spec_name: &str,
+    w: &SmtWriter,
+) -> Vec<CompDef> {
+    components
+        .iter()
+        .map(|comp| CompDef {
+            name: comp.name.clone(),
+            states: comp
+                .states
+                .iter()
+                .map(|(name, body)| {
+                    let resolved = body
+                        .iter()
+                        .map(|s| pre_resolve_stmt(s, spec_name, w))
+                        .collect();
+                    (name.clone(), resolved)
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn pre_resolve_stmt(stmt: &Stmt, spec_name: &str, w: &SmtWriter) -> Stmt {
+    match stmt {
+        Stmt::IfThenElse { cond, then_branch, else_branch } => Stmt::IfThenElse {
+            cond: pre_resolve_expr(cond, spec_name, w),
+            then_branch: then_branch.iter().map(|s| pre_resolve_stmt(s, spec_name, w)).collect(),
+            else_branch: else_branch.iter().map(|s| pre_resolve_stmt(s, spec_name, w)).collect(),
+        },
+        Stmt::Seq(stmts) => Stmt::Seq(stmts.iter().map(|s| pre_resolve_stmt(s, spec_name, w)).collect()),
+        _ => stmt.clone(),
+    }
+}
+
+fn pre_resolve_expr(expr: &Expr, spec_name: &str, w: &SmtWriter) -> Expr {
+    match expr {
+        Expr::Dot { expr: base, field } => {
+            let parts = flatten_dot_chain(expr);
+            if !parts.is_empty() && w.instances.contains_key(parts[0].as_str()) {
+                // Flow instance variable: resolve to qualified versioned name
+                let rest = parts[1..].join("_");
+                let inst_rest = format!("{}_{}", parts[0], rest);
+                // Look up in name_map
+                if let Some(qname) = w.name_map.get(&inst_rest) {
+                    let ver = w.ssa.current_ro(qname);
+                    return Expr::Var(format!("{}_{}", qname, ver));
+                }
+                if let Some(qname) = w.name_map.get(&rest) {
+                    let ver = w.ssa.current_ro(qname);
+                    return Expr::Var(format!("{}_{}", qname, ver));
+                }
+            }
+            // Not a flow ref, resolve sub-expressions
+            Expr::Dot {
+                expr: Box::new(pre_resolve_expr(base, spec_name, w)),
+                field: field.clone(),
+            }
+        }
+        Expr::UnOp { op, expr: inner } => Expr::UnOp {
+            op: *op,
+            expr: Box::new(pre_resolve_expr(inner, spec_name, w)),
+        },
+        Expr::BinOp { op, left, right } => Expr::BinOp {
+            op: *op,
+            left: Box::new(pre_resolve_expr(left, spec_name, w)),
+            right: Box::new(pre_resolve_expr(right, spec_name, w)),
+        },
+        _ => expr.clone(),
+    }
+}
+
+fn branches_have_flow(stmts: &[Stmt]) -> bool {
+    stmts
+        .iter()
+        .any(|s| matches!(s, Stmt::Call(_) | Stmt::FlowAssign { .. }))
+}
+
+fn branches_have_advance(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|s| matches!(s, Stmt::Advance(_)))
+}
+
 fn val_sort(val: &Val) -> &'static str {
     match val {
         Val::Bool(_) => "Bool",
@@ -1180,6 +2055,20 @@ fn smt_or(exprs: &[String]) -> String {
         exprs[0].clone()
     } else {
         format!("(or {})", exprs.join(" "))
+    }
+}
+
+/// Flatten a Dot chain to its constituent parts.
+/// `Dot(Dot(Var("a"), "b"), "c")` → `["a", "b", "c"]`
+fn flatten_dot_chain(expr: &Expr) -> Vec<String> {
+    match expr {
+        Expr::Var(name) => vec![name.clone()],
+        Expr::Dot { expr: base, field } => {
+            let mut parts = flatten_dot_chain(base);
+            parts.push(field.clone());
+            parts
+        }
+        _ => vec![],
     }
 }
 

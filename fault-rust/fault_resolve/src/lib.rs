@@ -351,10 +351,25 @@ pub fn resolve_system(sys: System) -> ResolvedProgram {
     let aliases = AliasMap::new();
     let scope: Vec<String> = vec![];
 
-    let (rounds, init_block, run_block) = match sys.run_block {
+    let (rounds, mut init_block, run_block) = match sys.run_block {
         Some((n, init, run)) => (n, init, run),
         None => (0, vec![], vec![]),
     };
+
+    // Convert global declarations to init_block instance creation statements.
+    // `global fl = new simple.fl` → `fl = new fl` (alias prefix stripped).
+    for g in &sys.globals {
+        let flow_type = if let Some(dot) = g.type_name.rfind('.') {
+            g.type_name[dot + 1..].to_string()
+        } else {
+            g.type_name.clone()
+        };
+        init_block.push(Stmt::FlowAssign {
+            name: g.name.clone(),
+            op: FlowOp::Assign,
+            expr: Expr::Var(format!("new {}", flow_type)),
+        });
+    }
 
     let stocks = merge_stocks(&sys.imports);
     let var_names: Vec<Name> = stocks

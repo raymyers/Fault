@@ -23,6 +23,11 @@ impl Ssa {
         *self.versions.entry(name.to_string()).or_insert(0)
     }
 
+    /// Get the current version without mutating (returns 0 if not tracked).
+    pub fn current_ro(&self, name: &str) -> u32 {
+        self.versions.get(name).copied().unwrap_or(0)
+    }
+
     /// Get the versioned name for the current version of a variable.
     pub fn current_name(&mut self, name: &str) -> String {
         let v = self.current(name);
@@ -58,6 +63,13 @@ impl Ssa {
     }
 
     /// Set the version of a specific variable.
+    /// Bump version and return the new version number (not the name).
+    pub fn bump(&mut self, name: &str) -> u32 {
+        let v = self.versions.entry(name.to_string()).or_insert(0);
+        *v += 1;
+        *v
+    }
+
     pub fn set_version(&mut self, name: &str, ver: u32) {
         self.versions.insert(name.to_string(), ver);
     }

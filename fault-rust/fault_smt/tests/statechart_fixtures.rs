@@ -150,6 +150,7 @@ fn normalize_block_numbers(s: &str) -> String {
             while i < bytes.len() && bytes[i].is_ascii_digit() {
                 i += 1;
             }
+            // Consume suffix (true/false + _N version)
             let mut end = i;
             while end < bytes.len() && bytes[end] != b' ' && bytes[end] != b')' && bytes[end] != b'(' {
                 end += 1;
@@ -160,7 +161,17 @@ fn normalize_block_numbers(s: &str) -> String {
                 seen_blocks.insert(num_str.to_string(), block_counter);
                 block_counter += 1;
             }
-            new_result.push_str(&format!("block{}{}", seen_blocks[num_str], suffix));
+            // Normalize suffix version: true_N → true_0, false_N → false_0
+            let norm_suffix = if let Some(rest) = suffix.strip_prefix("true_") {
+                let _ = rest;
+                "true_0"
+            } else if let Some(rest) = suffix.strip_prefix("false_") {
+                let _ = rest;
+                "false_0"
+            } else {
+                suffix
+            };
+            new_result.push_str(&format!("block{}{}", seen_blocks[num_str], norm_suffix));
             i = end;
         } else if s[i..].starts_with("_state-%") {
             // Normalize _state-%N to _state-%C where C is a canonical counter
@@ -258,4 +269,19 @@ fn statechart_choose2() {
 #[test]
 fn statechart_multioradvance() {
     check_statechart("multioradvance");
+}
+
+#[test]
+fn statechart_trigger() {
+    check_statechart("trigger");
+}
+
+#[test]
+fn statechart_statechart() {
+    check_statechart("statechart");
+}
+
+#[test]
+fn statechart_mixedcalls() {
+    check_statechart("mixedcalls");
 }
