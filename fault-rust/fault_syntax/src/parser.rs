@@ -149,7 +149,7 @@ impl Parser {
                     constants.extend(self.parse_const_decl()?);
                 }
                 TokenKind::Import => {
-                    import_decls.push(self.parse_import_decl()?);
+                    import_decls.extend(self.parse_import_decl()?);
                 }
                 TokenKind::Assert => {
                     invariants.push(self.parse_assertion(false)?);
@@ -216,7 +216,7 @@ impl Parser {
         loop {
             match self.kind() {
                 TokenKind::Import => {
-                    imports.push(self.parse_import_decl()?);
+                    imports.extend(self.parse_import_decl()?);
                 }
                 TokenKind::Global => {
                     globals.push(self.parse_global_decl()?);
@@ -1148,51 +1148,63 @@ impl Parser {
 
     // ── Imports ─────────────────────────────────────────────────────
 
-    fn parse_import_decl(&mut self) -> Result<ImportDecl, ParseError> {
+    fn parse_import_decl(&mut self) -> Result<Vec<ImportDecl>, ParseError> {
         self.expect(TokenKind::Import)?;
 
-        let mut alias = String::new();
-        let mut path = String::new();
-
         if self.eat(TokenKind::LParen) {
-            // Grouped: import (alias "path") or import ("path")
+            // Grouped: import("path1" "path2") or import(alias "path", ...)
+            let mut decls = Vec::new();
             while self.kind() != TokenKind::RParen {
+                let mut alias = String::new();
                 if self.kind() == TokenKind::Ident || self.kind() == TokenKind::Dot {
                     alias = self.advance().text.clone();
                 }
-                if self.kind() == TokenKind::StringLit {
-                    path = self.advance().text.clone();
-                }
+                let path = if self.kind() == TokenKind::StringLit {
+                    self.advance().text.clone()
+                } else {
+                    String::new()
+                };
                 self.eat(TokenKind::Comma);
                 self.eat_semi();
+
+                if alias.is_empty() {
+                    alias = Self::alias_from_path(&path);
+                }
+                decls.push(ImportDecl { alias, path });
             }
             self.expect(TokenKind::RParen)?;
+            self.eat_semi();
+            Ok(decls)
         } else {
             // Bare: import alias "path" or import "path"
+            let mut alias = String::new();
             if self.kind() == TokenKind::Ident {
                 let next = self.tokens.get(self.pos + 1).map(|t| t.kind);
                 if next == Some(TokenKind::StringLit) {
                     alias = self.advance().text.clone();
                 }
             }
-            if self.kind() == TokenKind::StringLit {
-                path = self.advance().text.clone();
+            let path = if self.kind() == TokenKind::StringLit {
+                self.advance().text.clone()
+            } else {
+                String::new()
+            };
+            self.eat_semi();
+
+            if alias.is_empty() {
+                alias = Self::alias_from_path(&path);
             }
+            Ok(vec![ImportDecl { alias, path }])
         }
-        self.eat_semi();
+    }
 
-        // Default alias = spec name derived from filename
-        if alias.is_empty() {
-            alias = path
-                .rsplit('/')
-                .next()
-                .unwrap_or(&path)
-                .trim_end_matches(".fspec")
-                .trim_end_matches(".fsystem")
-                .to_string();
-        }
-
-        Ok(ImportDecl { alias, path })
+    fn alias_from_path(path: &str) -> String {
+        path.rsplit('/')
+            .next()
+            .unwrap_or(path)
+            .trim_end_matches(".fspec")
+            .trim_end_matches(".fsystem")
+            .to_string()
     }
 
     // ── System-specific ─────────────────────────────────────────────
@@ -1726,6 +1738,26 @@ for 2 run {
         assert_eq!(sys.components[0].name, "drain");
         assert_eq!(sys.components[0].states.len(), 3);
         assert_eq!(sys.start_states, vec![("drain".into(), "initial".into())]);
+    }
+
+    #[test]
+    fn parse_grouped_imports() {
+        let src = r#"system repl;
+import(
+    "cache.fspec"
+    "orchestrator.fspec"
+);
+component c = states{
+    idle: func{ stay(); },
+};
+start { c: idle, };
+"#;
+        let sys = parse_system(src).unwrap();
+        assert_eq!(sys.import_decls.len(), 2);
+        assert_eq!(sys.import_decls[0].alias, "cache");
+        assert_eq!(sys.import_decls[0].path, "cache.fspec");
+        assert_eq!(sys.import_decls[1].alias, "orchestrator");
+        assert_eq!(sys.import_decls[1].path, "orchestrator.fspec");
     }
 
     #[test]
